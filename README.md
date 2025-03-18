@@ -29,7 +29,7 @@ apt install kitty kitty-shell-integration kitty-terminfo
 ```
 python3 -m venv env
 source env/bin/activate
-pip install -U pip  && pip install httpx prompt_toolkit pillow
+pip install -U pip  && pip install pyyaml httpx prompt_toolkit pillow
 ```
 
 5. Положить конфиг файл

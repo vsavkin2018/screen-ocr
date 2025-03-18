@@ -32,15 +32,7 @@ source env/bin/activate
 pip install -U pip  && pip install httpx prompt_toolkit pillow
 ```
 
-6. Можно запускать прям из терминала (kitty или другого): `python3 screenshot_ocr.py` - но я представляю так, что можно повесить на хоткей запуск 
-kitty с этой программой, вот например запускать скрипт такой:
-```
-#!/bin/bash
-
-cd <путь>/screen-ocr || exit 1
-
-exec kitty -e ./env/bin/python3 screenshot_ocr.py
-```
+6. Можно запускать прям из терминала (kitty или другого): `python3 screenshot_ocr.py` - но можно повесить на хоткей приведённый скрипт `start_ocr` (запускать с полным путём), который стартует kitty с OCR-процессом там.
 
 ## Как работать
 

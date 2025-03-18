@@ -130,7 +130,7 @@ class ImageExplorer:
 
             try:
                 subprocess.run(
-                    ["kitty", "+kitten", "icat", "--align=left", "--stdin" ],
+                    ["kitty", "+kitten", "icat", "--align=left", "--stdin=yes" ],
                     input=img_bytes,
                     check=True,
                 )

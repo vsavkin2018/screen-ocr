@@ -32,6 +32,13 @@ source env/bin/activate
 pip install -U pip  && pip install httpx prompt_toolkit pillow
 ```
 
+5. Положить конфиг файл
+```
+mkdir -p ~/.config/screen-ocr
+cp config.yaml ~/.config/screen-ocr/
+vi ~/.config/screen-ocr/config.yaml
+```
+
 6. Можно запускать прям из терминала (kitty или другого): `python3 screenshot_ocr.py` - но можно повесить на хоткей приведённый скрипт `start_ocr` (запускать с полным путём), который стартует kitty с OCR-процессом там.
 
 ## Как работать
@@ -42,4 +49,5 @@ pip install -U pip  && pip install httpx prompt_toolkit pillow
 
 В конце нажать q для выхода.
 
-Планируется больше фичей: выбор модели, выбор промпта, чат с моделью чтоб уточнить что ещё нужно. А пока так.
+Планируется больше фичей: выбор промпта, чат с моделью чтоб уточнить что ещё нужно. А пока так.
+Уже есть выбор модели: кнопкой m из списка в конфиге. Или даже /model <имя>

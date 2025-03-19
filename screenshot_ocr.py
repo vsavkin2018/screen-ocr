@@ -166,6 +166,68 @@ class ImageExplorer:
         self.current_index = (self.current_index - 1) % len(self.image_paths)
         self.show_image()
 
+# ======================================================================
+# CTRL+C HANDLING STRATEGY FOR OCR OPERATIONS
+# ======================================================================
+
+# Requirements:
+# 1. First Ctrl+C during OCR should:
+#    a) Set cancellation flag to abort OCR stream
+#    b) Close HTTP connection immediately
+#    c) Clear OCR output buffer
+#    d) Return to command prompt with "OCR aborted" message
+# 2. Must prevent:
+#    a) Unclosed network connections
+#    b) Asyncio cancellation errors bubbling up
+
+# State tracking variables needed:
+# - ocr_running: bool (True during OCR processing)
+# - ocr_cancelled: bool (True when cancellation requested)
+# - force_exit: bool (True after second Ctrl+C)
+
+# Signal handling flow:
+# 1. SIGINT handler checks current state:
+#    if OCR_RUNNING and not ocr_cancelled:
+#        set ocr_cancelled = True
+#        cancel OCR async task
+#        close HTTP transport
+#    else:
+#        default behavior
+
+# OCR processing layer requirements:
+# - HTTP client must use timeouts for all operations
+# - Response streaming must handle cancellation via separate flag
+# - Network operations in cancellable context:
+#    async for chunk in response.aiter_lines():
+#        if ocr_cancelled:
+#            break
+#        yield chunk
+
+# Terminal layer requirements:
+# - Print "\nOCR aborted" before returning to prompt
+
+# Error prevention measures:
+# 1. Wrap OCR task in dedicated cancellable context
+# 2. Separate network cancellation from application cancellation
+# 3. Use shielded tasks for cleanup operations
+# 4. Atomic flag updates with threading.Lock
+
+# Expected sequence for happy path:
+# User presses Ctrl+C -> OCR cancellation flag set -> HTTP stream closed ->
+# OCR task exits cleanly -> UI shows aborted message -> Return to prompt
+
+# Edge case handling:
+# - Ctrl+C during HTTP connection establishment
+# - Ctrl+C while processing final OCR chunk
+# - Rapid double Ctrl+C during network latency
+# - Ctrl+C during terminal output redraw
+
+# Testing scenarios:
+# 1. Ctrl+C during active OCR streaming
+# 2. Ctrl+C while waiting for first OCR response
+# 3. Ctrl+C after OCR completion but before cleanup
+# 4. Ctrl+C during error handling of failed OCR
+
     async def stream_ocr(self, is_running: asyncio.Event) -> AsyncGenerator[str, None]:
         """Stream OCR results from Ollama API"""
         try:

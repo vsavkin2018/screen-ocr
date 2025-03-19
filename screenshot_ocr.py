@@ -465,6 +465,8 @@ async def main(image_dir: Path = None):
                 await handle_model_command(cmd, explorer)
             elif cmd.startswith('/engine'):
                 engine_type = await handle_engine_command(cmd, explorer)
+                if current_engine:
+                    current_engine.cancel()
                 current_engine = None
             elif cmd == '/quit':
                 break
@@ -481,6 +483,8 @@ async def main(image_dir: Path = None):
             ocr_running.clear()
             current_engine = None
         except EOFError:
+            if current_engine:
+                current_engine.cancel()
             print("quit")
             break
 

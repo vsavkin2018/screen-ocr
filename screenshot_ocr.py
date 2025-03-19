@@ -14,7 +14,8 @@ import httpx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.enums import EditingMode
-from prompt_toolkit.shortcuts import radiolist_dialog
+#from prompt_toolkit.shortcuts import radiolist_dialog
+from prompt_toolkit.completion import WordCompleter
 
 from PIL import Image
 import io
@@ -509,6 +510,56 @@ async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asy
         print()
         ocr_running.clear()
 
+async def make_multiple_choice(L: list, prompt: str) -> Optional[str]:
+    """
+    Let user choose from the list.
+    Elements of the list are either strings or (name, description) tuples
+
+    Returns a string (name) or None
+    """
+    max_len = 70
+    LL = []
+    for elem in L:
+        if type(elem) is tuple:
+            name, desc = elem
+            printable = f"{name}: {desc}"
+            if len(printable)>max_len:
+                printable = printable[:max_len-3] + "..."
+            LL.append((name, printable))
+        else:
+            LL.append((elem, elem))
+
+    for i,(_,printable) in enumerate(LL, 1):
+        print(f" {i}. {printable}")
+
+    completer = WordCompleter([name for name,_ in LL])
+    session = PromptSession()
+
+    selection = None
+    try:
+        selection = await session.prompt_async(
+                prompt,
+                completer=completer,
+                complete_while_typing=True,
+            )
+
+        # Try to convert to index
+        if selection.isdigit():
+            try:
+                index = int(selection) -1
+                if index<0:
+                    raise IndexError()
+                selection = LL[index][0]
+            except ValueError:
+                pass
+            except IndexError:
+                print("No such index:",selection)
+                return None
+    except (KeyboardInterrupt, EOFError):
+        print("\n cancelled")
+    return selection
+
+
 async def handle_model_command(cmd: str, explorer: ImageExplorer):
     """Handle model selection commands"""
     if ' ' in cmd:
@@ -517,11 +568,11 @@ async def handle_model_command(cmd: str, explorer: ImageExplorer):
         print(f" Model set to: {model_name}")
     else:
         if explorer.available_models:
-            selection = await radiolist_dialog(
-                title="Select Model",
-                text="Recommended models from config:",
-                values=[(m, m) for m in explorer.available_models],
-            ).run_async()
+            print("Recommendef models from config:")
+            selection = await make_multiple_choice(
+                explorer.available_models,
+                "Select model: "
+            )
             
             if selection:
                 explorer.set_model(selection)
@@ -534,11 +585,13 @@ async def handle_engine_command(cmd: str, explorer: ImageExplorer) -> str:
     if ' ' in cmd:
         name = cmd.split(' ', 1)[1]
     else:
-        name = await radiolist_dialog(
-                title="Select Engine",
-                text="Available engines:",
-                values=[(n,n) for n,_ in ENGINE_LIST],
-            ).run_async()
+        print("Available: engines:")
+        name = await make_multiple_choice(
+                [n for n,_ in ENGINE_LIST],
+                "Select engine: "
+            )
+        if not name:
+              name = ENGINE_LIST[0][0]
     print(f" Engine set to: {name}")
     return name
 

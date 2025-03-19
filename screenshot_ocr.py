@@ -19,52 +19,58 @@ from prompt_toolkit.shortcuts import radiolist_dialog
 from PIL import Image
 import io
 
-# ======================
-# CONFIGURATION HANDLING
-# ======================
 DEFAULT_CONFIG = {
     "image_settings": {
         "default_directory": "~/Pictures/Screenshots",
         "filename_pattern": "Screenshot*.png"
     },
-    "ollama_settings": {
+    "ollama": {  
         "base_url": "http://localhost:11434/api/generate",
-        "models": ["llama3.2-vision"]
+        "models": ["llama3.2-vision"],
+        "max_width": 1200,  
+        "max_height": 1200   
     },
     "preview_settings": {
         "max_width": 800,
         "max_height": 600
-    },
-    "ocr_settings": {
-        "max_width": 1200,
-        "max_height": 1200
     }
 }
 
-def load_config() -> Dict:
-    """Load configuration from YAML files with fallback to defaults"""
+def load_config() -> tuple[dict, list[str]]:
+    """Load configuration and return (config, warnings)"""
+    config = DEFAULT_CONFIG.copy()
+    warnings = []
+
     config_paths = [
         Path("screenshot_ocr.yaml"),
         Path.home() / ".config" / "screen-ocr" / "config.yaml"
     ]
-    
+
     for path in config_paths:
         expanded_path = path.expanduser()
         if expanded_path.exists():
             try:
                 with open(expanded_path, 'r') as f:
-                    config = yaml.safe_load(f) or {}
-                    return {**DEFAULT_CONFIG, **config}  # Merge with defaults
+                    user_config = yaml.safe_load(f) or {}
+
+                    if 'ocr_settings' in user_config:
+                        warnings.append(
+                            f"⚠️  Config warning: 'ocr_settings' section in {path} is deprecated.\n"
+                            "   Please move 'max_width'/'max_height' under 'ollama' section"
+                        )
+
+                    config.update(user_config)
+
             except Exception as e:
-                print(f"Error loading config {path}: {str(e)}")
-                return DEFAULT_CONFIG
-    return DEFAULT_CONFIG
+                warnings.append(f"Error loading config {path}: {str(e)}")
+
+    return config, warnings
 
 # ==================
 # IMAGE EXPLORER
 # ==================
 class ImageExplorer:
-    def __init__(self, config: Dict, image_dir: Path = None, reversed: bool = False):
+    def __init__(self, config: Dict, image_dir: Path = None):
         self.config = config
         self._init_image_dir(image_dir)
         self._init_models()
@@ -83,14 +89,13 @@ class ImageExplorer:
         
         self.image_paths = sorted(
             self.image_dir.glob(pattern),
-            key=lambda p: p.stat().st_mtime
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
         )
-        if reversed:
-            self.image_paths = self.image_paths[::-1]
 
     def _init_models(self):
         """Initialize model configuration"""
-        ollama_config = self.config.get("ollama_settings", {})
+        ollama_config = self.config.get("ollama", {})
         self.available_models = ollama_config.get("models", [])
         self.current_model = (
             self.available_models[0] 
@@ -167,7 +172,7 @@ class ImageExplorer:
             async with httpx.AsyncClient() as client:
                 img_path = self.current_image()
                 img = Image.open(img_path)
-                img = self.resize_image(img, "ocr_settings")
+                img = self.resize_image(img, "ollama")
                 
                 buffer = io.BytesIO()
                 img.save(buffer, format="PNG")
@@ -182,9 +187,9 @@ class ImageExplorer:
                 
                 async with client.stream(
                     "POST",
-                    self.config["ollama_settings"].get("base_url", DEFAULT_CONFIG["ollama_settings"]["base_url"]),
+                    self.config["ollama"].get("base_url", DEFAULT_CONFIG["ollama"]["base_url"]),
                     json=data,
-                    timeout=30
+                    timeout=self.config["ollama"].get("timeout", 180)
                 ) as response:
                     if response.status_code != 200:
                         yield f"\n OCR Error ({response.status_code}): {await response.atext()}"
@@ -267,14 +272,16 @@ class InputHandler:
 # MAIN APPLICATION
 # ==================
 async def main(image_dir: Path = None):
-    config = load_config()
-    explorer = ImageExplorer(config, image_dir, reversed=True)
+    config, warnings = load_config()
+    explorer = ImageExplorer(config, image_dir)
     
+    print("\x1b[2J\x1b[H Screenshot OCR Explorer")
+    if warnings:
+        print("\n".join(warnings))
     if not explorer.image_paths:
         print(f"❌ No images found matching '{config['image_settings']['filename_pattern']}'")
         return
 
-    print("\x1b[2J\x1b[H Screenshot OCR Explorer")
     explorer.show_image()
     
     handler = InputHandler()

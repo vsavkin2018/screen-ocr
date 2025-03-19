@@ -2,16 +2,16 @@ image_settings:
   default_directory: ~/Pictures/Screenshots
   filename_pattern: "Screen*.png"
 
-ollama_settings:
-  base_url: http://localhost:11434/api/generate
-  models:
-    - llama3.2-vision
-    - gemma3:4b
-
 preview_settings:
   max_width: 1000
   max_height: 800
 
-ocr_settings:
+ollama:
+  base_url: http://localhost:11434/api/generate
+  models:
+    - llama3.2-vision
+    - gemma3:4b
   max_width: 1200
   max_height: 1200
+
+

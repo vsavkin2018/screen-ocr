@@ -227,7 +227,7 @@ class OllamaEngine(BaseEngine):
             asyncio.create_task(self._active_request.aclose())
 
     async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
-        """Ollama-specific OCR implementation"""
+        """Ollama-specific OCR implementation with error handling"""
         self._cancelled = False
         try:
             async with httpx.AsyncClient() as client:
@@ -237,34 +237,43 @@ class OllamaEngine(BaseEngine):
 
                 if not self.config["current_prompt"]:
                     self.config["current_prompt"] = self.config["prompt_list"][0][1]
-                
+
                 data = {
                     "model": self.config.get("model", "llama3.2-vision"),
                     "prompt": self.config["current_prompt"],
                     "images": [b64_image],
                     "stream": True
                 }
-                
-                self._active_request = client.stream(
-                    "POST",
-                    self.config.get("base_url", DEFAULT_CONFIG["ollama"]["base_url"]),
-                    json=data,
-                    timeout=self.config.get("timeout", 180)
-                )
-                
-                async with self._active_request as response:
-                    if response.status_code != 200:
-                        yield f"\n OCR Error ({response.status_code}): {await response.atext()}"
-                        return
 
-                    async for chunk in response.aiter_lines():
-                        if self._cancelled:
-                            yield "\n OCR aborted"
+                try:
+                    self._active_request = client.stream(
+                        "POST",
+                        self.config.get("base_url", DEFAULT_CONFIG["ollama"]["base_url"]),
+                        json=data,
+                        timeout=self.config.get("timeout", 180)
+                    )
+
+                    async with self._active_request as response:
+                        if response.status_code != 200:
+                            yield f"\n OCR Error ({response.status_code}): {await response.atext()}"
                             return
-                        try:
-                            yield json.loads(chunk).get("response", "")
-                        except json.JSONDecodeError:
-                            continue
+
+                        async for chunk in response.aiter_lines():
+                            if self._cancelled:
+                                yield "\n OCR aborted"
+                                return
+                            try:
+                                yield json.loads(chunk).get("response", "")
+                            except json.JSONDecodeError:
+                                continue
+                except httpx.ReadTimeout:
+                    yield "\n OCR Error: Request timed out. Check connection or increase timeout."
+                except httpx.ConnectError:
+                    yield "\n OCR Error: Cannot connect to Ollama. Is it running?"
+                except httpx.HTTPStatusError as e:
+                    yield f"\n OCR Error: {e.response.status_code} {e.response.reason_phrase}"
+                except Exception as e:
+                    yield f"\n Unexpected OCR Error: {str(e)}"
         finally:
             self._active_request = None
             self._cancelled = False

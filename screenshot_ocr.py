@@ -178,15 +178,25 @@ class BaseEngine(ABC):
 
     def prepare_image(self, img: Image.Image) -> Image.Image:
         """Resize image according to engine requirements"""
-        return resize_image(img, self.max_width, self.max_height)
+        max_width, max_height = self.get_max_dimensions()
+        return resize_image(img, max_width, max_height)
+
+class DummyEngine(BaseEngine):
+    def __init__(self):
+        pass
+    def cancel(self):
+        pass
+    async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
+        yield("Nothing to see here!")
 
 class OllamaEngine(BaseEngine):
     def __init__(self, config: dict):
         self.config = config["ollama"]
         self._active_request: Optional[httpx.Response] = None
         self._cancelled = False
-        self.max_width = self.config.get("max_width", 1200)
-        self.max_height = self.config.get("max_height", 1200)
+
+    def get_max_dimensions(self) -> Tuple[Optional[int], Optional[int]]:
+        return self.config.get("max_width", 1200), self.config.get("max_height", 1200)
 
     def cancel(self):
         """Cancel current OCR operation"""
@@ -234,6 +244,12 @@ class OllamaEngine(BaseEngine):
         finally:
             self._active_request = None
             self._cancelled = False
+
+# Used to select and create engines
+ENGINE_LIST = [
+        ("ollama", lambda conf : OllamaEngine(conf)),
+        ("dummy", lambda conf : DummyEngine())
+]
 
 # ==================
 # IMAGE EXPLORER
@@ -332,8 +348,9 @@ class ImageExplorer:
     
     def create_engine(self, engine_type: str = "ollama") -> BaseEngine:
         """Factory method for OCR engines"""
-        if engine_type == "ollama":
-            return OllamaEngine(self.config)
+        for name, create_func in ENGINE_LIST:
+            if engine_type == name:
+                return create_func(self.config)
         raise ValueError(f"Unknown engine type: {engine_type}")
 
 
@@ -353,7 +370,8 @@ class InputHandler:
             'p': '/prev',
             'o': '/ocr',
             'm': '/model',
-            'q': '/quit'
+            'e': '/engine',
+            'q': '/quit',
         }
         
         for key, cmd in quick_actions.items():
@@ -403,6 +421,7 @@ async def main(image_dir: Path = None):
     config, warnings = load_config()
     explorer = ImageExplorer(config, image_dir)
     current_engine: Optional[BaseEngine] = None  # Track active engine
+    engine_type = ENGINE_LIST[0][0]
     
     print("\x1b[2J\x1b[H Screenshot OCR Explorer")
     if warnings:
@@ -431,7 +450,7 @@ async def main(image_dir: Path = None):
                 explorer.prev_image()
             elif cmd == '/ocr':
                 if not current_engine:
-                    current_engine = explorer.create_engine("ollama")
+                    current_engine = explorer.create_engine(engine_type)
                 if not ocr_running.is_set():
                     ocr_running.set()
                     print("\n OCR Results:")
@@ -444,6 +463,9 @@ async def main(image_dir: Path = None):
                     print("\n OCR already in progress")
             elif cmd.startswith('/model'):
                 await handle_model_command(cmd, explorer)
+            elif cmd.startswith('/engine'):
+                engine_type = await handle_engine_command(cmd, explorer)
+                current_engine = None
             elif cmd == '/quit':
                 break
             else:
@@ -502,6 +524,19 @@ async def handle_model_command(cmd: str, explorer: ImageExplorer):
                 print(f" Model changed to: {selection}")
         else:
             print(" No recommended models in config. Use '/model <name>' to set manually.")
+
+async def handle_engine_command(cmd: str, explorer: ImageExplorer) -> str:
+    """Handle engine selection commands"""
+    if ' ' in cmd:
+        name = cmd.split(' ', 1)[1]
+    else:
+        name = await radiolist_dialog(
+                title="Select Engine",
+                text="Available engines:",
+                values=[(n,n) for n,_ in ENGINE_LIST],
+            ).run_async()
+    print(f" Engine set to: {name}")
+    return name
 
 def real_main():
     config = load_config()

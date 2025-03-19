@@ -256,10 +256,11 @@ class ImageExplorer:
                     if response.status_code != 200:
                         yield f"\n OCR Error ({response.status_code}): {await response.atext()}"
                         return
-                        
+
                     async for chunk in response.aiter_lines():
                         if self.ocr_cancelled:
                             yield "\n OCR aborted"
+                            await response.aclose()  # Explicitly close the response
                             return
                         try:
                             yield json.loads(chunk).get("response", "")
@@ -367,7 +368,10 @@ async def main(image_dir: Path = None):
                     ocr_running.set()
                     print("\n OCR Results:")
                     ocr_task = asyncio.create_task(_run_ocr(explorer, ocr_running))
-                    await ocr_task
+                    try:
+                        await ocr_task
+                    except asyncio.CancelledError:
+                        print("\n OCR aborted")
                 else:
                     print("\n OCR already in progress")
             elif cmd.startswith('/model'):
@@ -377,13 +381,20 @@ async def main(image_dir: Path = None):
             else:
                 print(f" Unknown command: {cmd}")
                 print("Available: /next(n), /prev(p), /ocr(o), /model(m), /quit(q)")
-                
+
         except KeyboardInterrupt:
             if ocr_running.is_set():
                 explorer.ocr_cancelled = True
                 print("\n Cancelling OCR...")
-                await ocr_task
+                if ocr_task:
+                    ocr_task.cancel()
+                    try:
+                        await ocr_task
+                    except asyncio.CancelledError:
+                        pass  # Expected error on cancellation
             ocr_running.clear()
+        except EOFError:
+            break
 
 async def _run_ocr(explorer: ImageExplorer, ocr_running: asyncio.Event):
     """Handle OCR streaming output"""

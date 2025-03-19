@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import List, AsyncGenerator, Tuple, Optional, Dict
 import yaml
+import copy
 
 import httpx
 from prompt_toolkit import PromptSession
@@ -30,7 +31,19 @@ DEFAULT_CONFIG = {
         "base_url": "http://localhost:11434/api/generate",
         "models": ["llama3.2-vision"],
         "max_width": 1200,  
-        "max_height": 1200   
+        "max_height": 1200,
+        "current_prompt": None, # this will be changes in runtime
+        "prompt_list": [ # will be overrided by "prompts" if exists
+            ("simple", "Extract text verbatim from this image. OCR only, no commentary."),
+            ("generic", """Act as an OCR assistant. Analyze the provided image and:
+                1. Recognize all visible text in the image as accurately as possible.
+                2. Maintain the original structure and formatting of the text.
+                3. If any words or phrases are unclear, indicate this with [unclear] in your transcription.
+
+                Provide only the transcription without any additional comments.""" )
+        ],
+        
+               
     },
     "preview_settings": {
         "max_width": 800,
@@ -38,14 +51,21 @@ DEFAULT_CONFIG = {
     }
 }
 
+def deep_merge(dst: Dict, src: Dict):
+    for key, value in src.items():
+        if isinstance(value, dict) and key in dst:
+            deep_merge(dst[key], value)
+        else:
+            dst[key] = value
+
 def load_config() -> tuple[dict, list[str]]:
     """Load configuration and return (config, warnings)"""
-    config = DEFAULT_CONFIG.copy()
+    config = copy.deepcopy(DEFAULT_CONFIG)
     warnings = []
 
     config_paths = [
+        Path.home() / ".config" / "screen-ocr" / "config.yaml",
         Path("screenshot_ocr.yaml"),
-        Path.home() / ".config" / "screen-ocr" / "config.yaml"
     ]
 
     for path in config_paths:
@@ -61,7 +81,7 @@ def load_config() -> tuple[dict, list[str]]:
                             "   Please move 'max_width'/'max_height' under 'ollama' section"
                         )
 
-                    config.update(user_config)
+                    deep_merge(config, user_config)
 
             except Exception as e:
                 warnings.append(f"Error loading config {path}: {str(e)}")
@@ -214,10 +234,13 @@ class OllamaEngine(BaseEngine):
                 buffer = io.BytesIO()
                 image.save(buffer, format="PNG")
                 b64_image = base64.b64encode(buffer.getvalue()).decode()
+
+                if not self.config["current_prompt"]:
+                    self.config["current_prompt"] = self.config["prompt_list"][0][1]
                 
                 data = {
                     "model": self.config.get("model", "llama3.2-vision"),
-                    "prompt": "Extract text verbatim from this image. OCR only, no commentary.",
+                    "prompt": self.config["current_prompt"],
                     "images": [b64_image],
                     "stream": True
                 }
@@ -372,6 +395,7 @@ class InputHandler:
             'o': '/ocr',
             'm': '/model',
             'e': '/engine',
+            'P': '/prompt',
             'q': '/quit',
         }
         
@@ -464,8 +488,10 @@ async def main(image_dir: Path = None):
                     print("\n OCR already in progress")
             elif cmd.startswith('/model'):
                 await handle_model_command(cmd, explorer)
+            elif cmd.startswith('/prompt'):
+                await handle_prompt_command(cmd, config)
             elif cmd.startswith('/engine'):
-                engine_type = await handle_engine_command(cmd, explorer)
+                engine_type = await handle_engine_command(cmd)
                 if current_engine:
                     current_engine.cancel()
                 current_engine = None
@@ -520,15 +546,16 @@ async def make_multiple_choice(L: list, prompt: str) -> Optional[str]:
     max_len = 70
     LL = []
     for elem in L:
-        if type(elem) is tuple:
+        if isinstance(elem, tuple) or isinstance(elem, list):
             name, desc = elem
+            desc = ' '.join(desc.split()) # replace multiple whitespaces by single space
             printable = f"{name}: {desc}"
             if len(printable)>max_len:
                 printable = printable[:max_len-3] + "..."
             LL.append((name, printable))
         else:
             LL.append((elem, elem))
-
+    #print ("debug:", L, LL)
     for i,(_,printable) in enumerate(LL, 1):
         print(f" {i}. {printable}")
 
@@ -580,12 +607,36 @@ async def handle_model_command(cmd: str, explorer: ImageExplorer):
         else:
             print(" No recommended models in config. Use '/model <name>' to set manually.")
 
-async def handle_engine_command(cmd: str, explorer: ImageExplorer) -> str:
+async def handle_prompt_command(cmd: str, config: Dict):
+    """Handle prompt selection commands"""
+    pr = None
+    if ' ' in cmd:
+        pr = cmd.split(' ', 1)[1]
+    else:
+        print("Suggested prompts:")
+        PL = config["ollama"]["prompt_list"]
+        prname = await make_multiple_choice(
+                PL,
+                "Select prompt: "
+            )
+        if not prname:
+              prname = PL[0][0]
+
+        for n,p in PL:
+            if n==prname:
+                pr = p
+    if not pr:
+        print("Prompt not changed")
+    else:
+        print(f" New prompt:\n{pr}\n")
+        config["ollama"]["current_prompt"] = pr
+
+async def handle_engine_command(cmd: str) -> str:
     """Handle engine selection commands"""
     if ' ' in cmd:
         name = cmd.split(' ', 1)[1]
     else:
-        print("Available: engines:")
+        print("Available engines:")
         name = await make_multiple_choice(
                 [n for n,_ in ENGINE_LIST],
                 "Select engine: "

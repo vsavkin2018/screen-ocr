@@ -170,6 +170,8 @@ class ImageExplorer:
 # CTRL+C HANDLING STRATEGY FOR OCR OPERATIONS
 # ======================================================================
 
+# PLEASE DO NOT REMOVE THIS COMMENT BLOCK
+
 # Requirements:
 # 1. First Ctrl+C during OCR should:
 #    a) Set cancellation flag to abort OCR stream

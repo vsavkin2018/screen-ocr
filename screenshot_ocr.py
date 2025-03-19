@@ -387,16 +387,19 @@ async def main(image_dir: Path = None):
         except KeyboardInterrupt:
             if ocr_running.is_set():
                 explorer.ocr_cancelled = True
-                print("\n Cancelling OCR...")
-                if ocr_task:
-                    ocr_task.cancel()
-                    try:
-                        await ocr_task
-                    except asyncio.CancelledError:
-                        pass  # Expected error on cancellation
+                print() # some workaround probably
             ocr_running.clear()
         except EOFError:
+            print("quit")
             break
+
+    # Cancel any remaining tasks when exiting
+    if ocr_task and not ocr_task.done():
+        ocr_task.cancel()
+        try:
+            await ocr_task
+        except asyncio.CancelledError:
+            pass
 
 async def _run_ocr(explorer: ImageExplorer, ocr_running: asyncio.Event):
     """Handle OCR streaming output"""

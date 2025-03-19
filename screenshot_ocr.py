@@ -427,7 +427,10 @@ async def handle_model_command(cmd: str, explorer: ImageExplorer):
         else:
             print(" No recommended models in config. Use '/model <name>' to set manually.")
 
-if __name__ == "__main__":
+def real_main():
     config = load_config()
     image_dir = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else None
     asyncio.run(main(image_dir))
+
+if __name__ == "__main__":
+    real_main()

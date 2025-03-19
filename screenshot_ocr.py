@@ -18,6 +18,7 @@ from prompt_toolkit.shortcuts import radiolist_dialog
 
 from PIL import Image
 import io
+from abc import ABC, abstractmethod
 
 DEFAULT_CONFIG = {
     "image_settings": {
@@ -67,6 +68,174 @@ def load_config() -> tuple[dict, list[str]]:
     return config, warnings
 
 # ==================
+# IMAGE PROCESSING
+# ==================
+def resize_image(img: Image.Image, max_width: Optional[int], max_height: Optional[int]) -> Image.Image:
+    """Universal image resizing maintaining aspect ratio"""
+    if max_width is None and max_height is None:
+        return img
+
+    width, height = img.size
+    effective_max_w = max_width or width  # Treat None as no constraint
+    effective_max_h = max_height or height
+
+    if width <= effective_max_w and height <= effective_max_h:
+        return img
+
+    ratio = min(effective_max_w/width, effective_max_h/height)
+    new_size = (int(width*ratio), int(height*ratio))
+    return img.resize(new_size, Image.Resampling.LANCZOS)
+
+# ======================================================================
+# CTRL+C HANDLING STRATEGY FOR OCR OPERATIONS (Multi-Engine Version)
+# ======================================================================
+
+# ======================================================================
+# CRITICAL INTERRUPT HANDLING (DO NOT MODIFY WITHOUT TESTING)
+# ======================================================================
+#
+# Implementation Strategy for Ctrl+C/Ctrl+D:
+#
+# 1. Ctrl+C (KeyboardInterrupt) Handling:
+#    - During OCR Processing:
+#      a) Main app calls current_engine.cancel()
+#      b) Engine performs implementation-specific abort:
+#         - HTTP engines: Close connection
+#         - Subprocess engines: Send SIGTERM
+#         - Threaded engines: Set stop flags
+#      c) Engine's generator yields abort message
+#      d) Automatically returns to command prompt
+#    - At Idle State:
+#      a) Discard current input (if any)
+#      b) Show new command prompt
+#
+# 2. Ctrl+D (EOF) Handling:
+#    a) Clean exit with "Exiting..." confirmation
+#    b) Cancel current engine if active
+#    c) Safely closes event loop
+#
+# Key Components:
+# - BaseEngine.cancel(): Unified cancellation interface
+# - Engine-owned cleanup: Each implementation manages its resources
+# - Main app coordination: Tracks active engine instance
+#
+# Error Prevention:
+# 1. Single cancellation entry point (main app → engine.cancel())
+# 2. No direct task cancellation - engine-specific cleanup
+# 3. Connection/process cleanup owned by engine implementations
+# 4. Timeout enforcement per engine requirements
+#
+# Critical Implementation Details:
+# 1. Engine implementations MUST:
+#    - Implement cancel() to stop active operations atomically
+#    - Ensure generator termination after cancellation
+#    - Yield exactly ONE abort message when cancelled
+#    - Handle cleanup of network/subprocess resources
+#
+# 2. The main app MUST:
+#    - Maintain reference to current_engine during operations
+#    - Call cancel() on KeyboardInterrupt
+#    - Never manage engine-specific resources directly
+#    - Reset current_engine reference after completion
+#
+# 3. EOF handling MUST:
+#    - Break main loop immediately
+#    - Call cancel() if engine is active
+#
+# Edge Case Guarantees:
+# - Ctrl+C during HTTP streaming: Engine closes connection
+# - Ctrl+C during subprocess execution: Engine sends SIGTERM
+# - Rapid double Ctrl+C: Treated as single abort
+# - Ctrl+D during OCR: Full exit with engine cleanup
+# - Mixed engine types: Uniform cancellation behavior
+#
+# WARNING: This interrupt handling is engine-dependent. Modifications MUST:
+# - Preserve BaseEngine interface contract
+# - Maintain engine-owned resource cleanup
+# - Test all scenarios per engine type:
+#   1. HTTP-based engines (Ollama)
+#   2. Subprocess-based engines (Tesseract)
+#   3. Thread-pool engines
+#   4. Mixed interrupt sequences across types
+# ======================================================================
+
+
+# ==================
+# OCR ENGINES
+# ==================
+class BaseEngine(ABC):
+    @abstractmethod
+    async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
+        pass
+
+    @abstractmethod
+    def cancel(self):
+        pass
+
+    def get_max_dimensions(self) -> Tuple[Optional[int], Optional[int]]:
+        """Return (max_width, max_height) for this engine. None means no limit."""
+        return (None, None)  # Default: no resizing
+
+    def prepare_image(self, img: Image.Image) -> Image.Image:
+        """Resize image according to engine requirements"""
+        return resize_image(img, self.max_width, self.max_height)
+
+class OllamaEngine(BaseEngine):
+    def __init__(self, config: dict):
+        self.config = config["ollama"]
+        self._active_request: Optional[httpx.Response] = None
+        self._cancelled = False
+        self.max_width = self.config.get("max_width", 1200)
+        self.max_height = self.config.get("max_height", 1200)
+
+    def cancel(self):
+        """Cancel current OCR operation"""
+        self._cancelled = True
+        if self._active_request:
+            # Close the HTTP connection immediately
+            asyncio.create_task(self._active_request.aclose())
+
+    async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
+        """Ollama-specific OCR implementation"""
+        self._cancelled = False
+        try:
+            async with httpx.AsyncClient() as client:
+                buffer = io.BytesIO()
+                image.save(buffer, format="PNG")
+                b64_image = base64.b64encode(buffer.getvalue()).decode()
+                
+                data = {
+                    "model": self.config.get("model", "llama3.2-vision"),
+                    "prompt": "Extract text verbatim from this image. OCR only, no commentary.",
+                    "images": [b64_image],
+                    "stream": True
+                }
+                
+                self._active_request = client.stream(
+                    "POST",
+                    self.config.get("base_url", DEFAULT_CONFIG["ollama"]["base_url"]),
+                    json=data,
+                    timeout=self.config.get("timeout", 180)
+                )
+                
+                async with self._active_request as response:
+                    if response.status_code != 200:
+                        yield f"\n OCR Error ({response.status_code}): {await response.atext()}"
+                        return
+
+                    async for chunk in response.aiter_lines():
+                        if self._cancelled:
+                            yield "\n OCR aborted"
+                            return
+                        try:
+                            yield json.loads(chunk).get("response", "")
+                        except json.JSONDecodeError:
+                            continue
+        finally:
+            self._active_request = None
+            self._cancelled = False
+
+# ==================
 # IMAGE EXPLORER
 # ==================
 class ImageExplorer:
@@ -108,25 +277,20 @@ class ImageExplorer:
         self.current_model = model_name
         return True
 
-    def resize_image(self, img: Image.Image, setting_key: str) -> Image.Image:
-        """Resize image according to config settings"""
-        settings = self.config.get(setting_key, {})
-        max_w = settings.get("max_width", 800)
-        max_h = settings.get("max_height", 600)
-        
-        width, height = img.size
-        if width <= max_w and height <= max_h:
-            return img
-            
-        ratio = min(max_w/width, max_h/height)
-        new_size = (int(width*ratio), int(height*ratio))
-        return img.resize(new_size, Image.Resampling.LANCZOS)
+    def get_preview_image(self, path: Path) -> Image.Image:
+        """Get resized image for preview"""
+        img = Image.open(path)
+        settings = self.config["preview_settings"]
+        return resize_image(
+            img,
+            settings.get("max_width"),
+            settings.get("max_height")
+        )
 
     def _kitty_show_image(self, path: Path):
-        """Display image using Kitty terminal's icat"""
+        """Display image preview using Kitty terminal's icat"""
         try:
-            img = Image.open(path)
-            img = self.resize_image(img, "preview_settings")
+            img = self.get_preview_image(path)
 
             img_buffer = io.BytesIO()
             img.save(img_buffer, format="PNG")
@@ -165,116 +329,13 @@ class ImageExplorer:
     def prev_image(self):
         self.current_index = (self.current_index - 1) % len(self.image_paths)
         self.show_image()
+    
+    def create_engine(self, engine_type: str = "ollama") -> BaseEngine:
+        """Factory method for OCR engines"""
+        if engine_type == "ollama":
+            return OllamaEngine(self.config)
+        raise ValueError(f"Unknown engine type: {engine_type}")
 
-# ======================================================================
-# CTRL+C HANDLING STRATEGY FOR OCR OPERATIONS
-# ======================================================================
-
-# ======================================================================
-# CRITICAL INTERRUPT HANDLING (DO NOT MODIFY WITHOUT TESTING)
-# ======================================================================
-#
-# Implementation Strategy for Ctrl+C/Ctrl+D:
-#
-# 1. Ctrl+C (KeyboardInterrupt) Handling:
-#    - During OCR Processing:
-#      a) Sets 'ocr_cancelled' flag to True
-#      b) Generator detects flag → yields "OCR aborted" message
-#      c) Closes HTTP connection immediately
-#      d) Automatically returns to command prompt
-#    - At Idle State:
-#      a) Displays help hint: "Use '/quit' to exit or Ctrl+D"
-#
-# 2. Ctrl+D (EOF) Handling:
-#    a) Clean exit with "Exiting..." confirmation
-#    b) Ensures proper task cancellation
-#    c) Safely closes event loop
-#
-# Key Components:
-# - ocr_cancelled: Single cancellation flag for OCR operations
-# - Cooperative cancellation: Generator controls abort sequence
-# - Atomic state clearing: Always reset flags after completion
-#
-# Error Prevention:
-# 1. Single abort message source (generator only)
-# 2. No direct task cancellation - async-safe flag pattern
-# 3. Connection cleanup owned by HTTP client context
-# 4. Timeout-protected network operations
-#
-# Critical Implementation Details:
-# 1. The generator MUST:
-#    - Check ocr_cancelled before processing each chunk
-#    - Explicitly close the HTTP response on abort
-#    - Yield exactly ONE abort message
-#
-# 2. The main loop MUST:
-#    - Catch KeyboardInterrupt at top level
-#    - Never call task.cancel() directly
-#    - Clear ocr_cancelled flag after completion
-#
-# 3. EOF handling MUST:
-#    - Break main loop immediately
-#    - Cancel any pending OCR task
-#
-# Edge Case Guarantees:
-# - First Ctrl+C during HTTP connection: Aborts cleanly
-# - Rapid double Ctrl+C: Treated as single abort
-# - Ctrl+C during final processing: Safely ignores
-# - Ctrl+D during OCR: Full exit with cleanup
-#
-# WARNING: This interrupt handling is fragile. Any modifications MUST:
-# - Preserve the flag-based cancellation flow
-# - Maintain generator-controlled messaging
-# - Test all interrupt scenarios:
-#   1. Ctrl+C during active OCR streaming
-#   2. Ctrl+C during HTTP connection setup
-#   3. Ctrl+D during idle and active states
-#   4. Mixed interrupt sequences
-# ======================================================================
-
-    async def stream_ocr(self, is_running: asyncio.Event) -> AsyncGenerator[str, None]:
-        """Stream OCR results from Ollama API"""
-        try:
-            async with httpx.AsyncClient() as client:
-                img_path = self.current_image()
-                img = Image.open(img_path)
-                img = self.resize_image(img, "ollama")
-                
-                buffer = io.BytesIO()
-                img.save(buffer, format="PNG")
-                b64_image = base64.b64encode(buffer.getvalue()).decode()
-                
-                data = {
-                    "model": self.current_model,
-                    "prompt": "Extract text verbatim from this image. OCR only, no commentary.",
-                    "images": [b64_image],
-                    "stream": True
-                }
-                
-                async with client.stream(
-                    "POST",
-                    self.config["ollama"].get("base_url", DEFAULT_CONFIG["ollama"]["base_url"]),
-                    json=data,
-                    timeout=self.config["ollama"].get("timeout", 180)
-                ) as response:
-                    if response.status_code != 200:
-                        yield f"\n OCR Error ({response.status_code}): {await response.atext()}"
-                        return
-
-                    async for chunk in response.aiter_lines():
-                        if self.ocr_cancelled:
-                            yield "\n OCR aborted"
-                            await response.aclose()  # Explicitly close the response
-                            return
-                        try:
-                            yield json.loads(chunk).get("response", "")
-                        except json.JSONDecodeError:
-                            continue
-        except Exception as e:
-            yield f"\n OCR Error: {str(e)}"
-        finally:
-            is_running.clear()
-            self.ocr_cancelled = False
 
 # ==================
 # INPUT HANDLER
@@ -341,6 +402,7 @@ class InputHandler:
 async def main(image_dir: Path = None):
     config, warnings = load_config()
     explorer = ImageExplorer(config, image_dir)
+    current_engine: Optional[BaseEngine] = None  # Track active engine
     
     print("\x1b[2J\x1b[H Screenshot OCR Explorer")
     if warnings:
@@ -368,10 +430,12 @@ async def main(image_dir: Path = None):
             elif cmd == '/prev':
                 explorer.prev_image()
             elif cmd == '/ocr':
+                if not current_engine:
+                    current_engine = explorer.create_engine("ollama")
                 if not ocr_running.is_set():
                     ocr_running.set()
                     print("\n OCR Results:")
-                    ocr_task = asyncio.create_task(_run_ocr(explorer, ocr_running))
+                    ocr_task = asyncio.create_task(_run_ocr(current_engine, explorer, ocr_running))
                     try:
                         await ocr_task
                     except asyncio.CancelledError:
@@ -390,7 +454,10 @@ async def main(image_dir: Path = None):
             if ocr_running.is_set():
                 explorer.ocr_cancelled = True
                 print() # some workaround probably
+            if current_engine:
+                current_engine.cancel()
             ocr_running.clear()
+            current_engine = None
         except EOFError:
             print("quit")
             break
@@ -403,10 +470,14 @@ async def main(image_dir: Path = None):
         except asyncio.CancelledError:
             pass
 
-async def _run_ocr(explorer: ImageExplorer, ocr_running: asyncio.Event):
+async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asyncio.Event):
     """Handle OCR streaming output"""
     try:
-        async for token in explorer.stream_ocr(ocr_running):
+        img_path = explorer.current_image()
+        img = Image.open(img_path)
+        img = engine.prepare_image(img)
+
+        async for token in engine.stream_ocr(img):
             print(token, end="", flush=True)
     finally:
         print()

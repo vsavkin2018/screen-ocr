@@ -1,14 +1,9 @@
 #!/bin/bash
 
 DIR=`dirname "$0"`
-PYTHON="$DIR/env/bin/python3" 
 KITTY="/usr/bin/kitty"
-APP="$DIR/screenshot_ocr.py"
+APP="$DIR/env/bin/screenshot-ocr"
 
-if [ ! -x "$PYTHON" ]  ; then
-	echo "venv not found"
-	exit 1
-fi
 if [ ! -x "$KITTY" ]  ; then
 	echo "kitty not found"
 	exit 1
@@ -18,4 +13,4 @@ if [ ! -f "$APP" ] ; then
 	exit 1
 fi
 
-exec "$KITTY" -e "$PYTHON" "$APP"
+exec "$KITTY" -e "$APP"

@@ -29,7 +29,7 @@ apt install kitty kitty-shell-integration kitty-terminfo
 ```
 python3 -m venv env
 source env/bin/activate
-pip install -U pip  && pip install pyyaml httpx prompt_toolkit pillow
+pip install -U pip setuptools  && pip install pyyaml httpx prompt_toolkit pillow
 ```
 
 5. Положить конфиг файл
@@ -39,7 +39,11 @@ cp config.yaml ~/.config/screen-ocr/
 vi ~/.config/screen-ocr/config.yaml
 ```
 
-6. Можно запускать прям из терминала (kitty или другого): `python3 screenshot_ocr.py` - но можно повесить на хоткей приведённый скрипт `start_ocr` (запускать с полным путём), который стартует kitty с OCR-процессом там.
+6. Можно запускать прям из терминала (kitty или другого): `python3 screenshot_ocr.py` - но можно повесить на хоткей приведённый скрипт `start_ocr` , который стартует kitty с OCR-процессом там, сначала тогда нужно установить скрипт внутрь venv:
+```
+pip install -e .
+# можно запускать ./start_ocr
+```
 
 ## Как работать
 

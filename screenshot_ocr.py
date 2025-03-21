@@ -15,8 +15,8 @@ import httpx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.enums import EditingMode
-#from prompt_toolkit.shortcuts import radiolist_dialog
 from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import InMemoryHistory
 
 from PIL import Image
 import io
@@ -459,7 +459,9 @@ class ImageExplorer:
 # ==================
 class InputHandler:
     def __init__(self):
-        self.session = PromptSession()
+        self.history = InMemoryHistory()
+        self.session = PromptSession(history=self.history)
+        self.chat_session = None
         self.main_kb, self.command_kb, self.chat_kb = self._create_keybindings()
 
     def _create_keybindings(self) -> Tuple[KeyBindings, KeyBindings]:
@@ -486,17 +488,17 @@ class InputHandler:
             event.app.exit(result='/')
 
         command_kb = KeyBindings()
-        @command_kb.add('enter')
-        def _(event):
-            event.app.exit(result=event.app.current_buffer.text)
-        @command_kb.add('c-c')
-        def _(event):
-            event.app.exit(result=None)
+        #@command_kb.add('enter')
+        #def _(event):
+        #    event.app.exit(result=event.app.current_buffer.text)
+        #@command_kb.add('c-c')
+        #def _(event):
+        #    event.app.exit(result=None)
 
         chat_kb = KeyBindings()
-        @chat_kb.add('enter')
-        def _(event):
-            event.app.exit(result=event.app.current_buffer.text)
+        #@chat_kb.add('enter')
+        #def _(event):
+        #    event.app.exit(result=event.app.current_buffer.text)
             
         return main_kb, command_kb, chat_kb
 
@@ -511,11 +513,11 @@ class InputHandler:
             
             if cmd == '/':
                 full_cmd = await self.session.prompt_async(
-                    "/",
+                    "", default="/",
                     key_bindings=self.command_kb,
                     editing_mode=EditingMode.EMACS
                 )
-                return f"/{full_cmd}" if full_cmd else None
+                return full_cmd if full_cmd else None
                 
             return cmd
         except asyncio.CancelledError:
@@ -523,17 +525,20 @@ class InputHandler:
 
     async def get_chat_input(self) -> Optional[str]:
         """Multiline input with natural interrupt handling"""
-        lines = []
+        session = self.chat_session
+        if not session:
+            session = self.chat_session = PromptSession()
+        def cont(width, line_number, is_soft_wrap):
+            return "" if is_soft_wrap else "... "
         try:
-            while True:
-                line = await self.session.prompt_async(
-                    "Chat> " if not lines else "... ",
-                    key_bindings=self.chat_kb
-                )
-                if line.strip() == "/":
-                    break
-                lines.append(line.replace("//", "/", 1))
-            return "\n".join(lines)
+            line = await self.session.prompt_async(
+                "Chat> " ,
+                key_bindings=self.chat_kb,
+                multiline=True,
+                prompt_continuation = cont,
+            )
+            line = line.replace("//", "/", 1)
+            return line
         except (KeyboardInterrupt, EOFError):
             return None
 
@@ -585,7 +590,7 @@ async def main(image_dir: Path = None):
                     continue
 
                 user_input = await handler.get_chat_input()
-                if user_input is None:
+                if (user_input is None) or (user_input == "/"):
                     ctx.reset_chat()
                     print("\nExited chat mode")
                     continue
@@ -655,6 +660,7 @@ async def main(image_dir: Path = None):
                     'prepared_image': ctx.last_ocr_image
                 }
                 print(f"\nEntered chat mode (image: {ctx.chat_context['image_path'].name})")
+                print("Meta+Enter for enter, / or Ctrl+D for exit")
 
             elif cmd == '/quit':
                 break

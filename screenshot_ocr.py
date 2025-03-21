@@ -32,7 +32,8 @@ DEFAULT_CONFIG = {
         "models": ["llama3.2-vision"],
         "max_width": 1200,  
         "max_height": 1200,
-        "current_prompt": None, # this will be changes in runtime
+        "model": None, # this will be changed at runtime
+        "current_prompt": None, # this will be changed at runtime
         "prompt_list": [ # will be overrided by "prompts" if exists
             ("simple", "Extract text verbatim from this image. OCR only, no commentary."),
             ("generic", """Act as an OCR assistant. Analyze the provided image and:
@@ -42,7 +43,10 @@ DEFAULT_CONFIG = {
 
                 Provide only the transcription without any additional comments.""" )
         ],
-        
+        "chat_prompt": """You're an assistant working with OCR results. 
+        Current OCR context: {ocr_text}
+        User question: {question}
+        Please provide your answer using both image and text:""",
                
     },
     "preview_settings": {
@@ -85,6 +89,16 @@ def load_config() -> tuple[dict, list[str]]:
 
             except Exception as e:
                 warnings.append(f"Error loading config {path}: {str(e)}")
+
+    # Initialize model configuration
+    ollama_config = config.get("ollama", {})
+    available_models = ollama_config.get("models", [])
+    current_model = (
+        available_models[0] 
+        if available_models 
+        else "llama3.2-vision" )
+    ollama_config["model"] = current_model
+    # TODO: Parsing prompt dict-list
 
     return config, warnings
 
@@ -190,7 +204,7 @@ class BaseEngine(ABC):
         pass
 
     @abstractmethod
-    def cancel(self):
+    async def cancel(self):
         pass
 
     def get_max_dimensions(self) -> Tuple[Optional[int], Optional[int]]:
@@ -202,10 +216,12 @@ class BaseEngine(ABC):
         max_width, max_height = self.get_max_dimensions()
         return resize_image(img, max_width, max_height)
 
+    async def stream_chat(self, message: str, context: dict) -> AsyncGenerator[str, None]:
+        """Default chat implementation"""
+        yield "\nChat not supported\n"
+
 class DummyEngine(BaseEngine):
     def __init__(self):
-        pass
-    def cancel(self):
         pass
     async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
         yield("Nothing to see here!")
@@ -219,12 +235,13 @@ class OllamaEngine(BaseEngine):
     def get_max_dimensions(self) -> Tuple[Optional[int], Optional[int]]:
         return self.config.get("max_width", 1200), self.config.get("max_height", 1200)
 
-    def cancel(self):
+    async def cancel(self):
         """Cancel current OCR operation"""
         self._cancelled = True
         if self._active_request:
             # Close the HTTP connection immediately
-            asyncio.create_task(self._active_request.aclose())
+            await self._active_request.aclose()
+            self._active_request = None
 
     async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
         """Ollama-specific OCR implementation with error handling"""
@@ -239,7 +256,7 @@ class OllamaEngine(BaseEngine):
                     self.config["current_prompt"] = self.config["prompt_list"][0][1]
 
                 data = {
-                    "model": self.config.get("model", "llama3.2-vision"),
+                    "model": self.config["model"],
                     "prompt": self.config["current_prompt"],
                     "images": [b64_image],
                     "stream": True
@@ -248,7 +265,7 @@ class OllamaEngine(BaseEngine):
                 try:
                     self._active_request = client.stream(
                         "POST",
-                        self.config.get("base_url", DEFAULT_CONFIG["ollama"]["base_url"]),
+                        self.config["base_url"],
                         json=data,
                         timeout=self.config.get("timeout", 180)
                     )
@@ -278,6 +295,71 @@ class OllamaEngine(BaseEngine):
             self._active_request = None
             self._cancelled = False
 
+    async def stream_chat(self, message: str, context: dict) -> AsyncGenerator[str, None]:
+        """Multimodal chat with image context"""
+        self._cancelled = False
+        try:
+            async with httpx.AsyncClient() as client:
+                # Reuse prepared image from OCR context
+                img = context['prepared_image']
+                buffer = io.BytesIO()
+                img.save(buffer, format="PNG")
+                b64_image = base64.b64encode(buffer.getvalue()).decode()
+
+                # Build multimodal prompt
+                prompt = self.config["chat_prompt"].format(
+                        ocr_text=context['ocr_text'],
+                        question=message,
+                )
+
+                data = {
+                    "model": self.config["model"],
+                    "prompt": prompt,
+                    "images": [b64_image],
+                    "stream": True
+                }
+
+                try:
+                    self._active_request = client.stream(
+                        "POST",
+                        self.config["base_url"],
+                        json=data,
+                        timeout=self.config.get("timeout", 180)
+                    )
+
+                    async with self._active_request as response:
+                        if response.status_code != 200:
+                            yield f"\nChat Error ({response.status_code}): {await response.atext()}"
+                            return
+
+                        async for chunk in response.aiter_lines():
+                            if self._cancelled:
+                                yield "\n Chat aborted"
+                                return
+                            try:
+                                yield json.loads(chunk).get("response", "")
+                            except json.JSONDecodeError:
+                                continue
+                except httpx.RequestError as e:
+                    print(f"DEBUG: Caught httpx.RequestError in stream_chat: {type(e)}")
+                    if self._cancelled:
+                        yield "\n Chat aborted"
+                    else:
+                        yield "\n Chat connection error"
+                    return
+                except asyncio.CancelledError as e:
+                    print(f"DEBUG: Caught asyncio.CancelledError in stream_chat: {type(e)}")
+                    yield "\n Chat aborted"
+                    return
+
+
+
+        except Exception as e:
+            yield f"\nChat Error: {str(e)}"
+        finally:
+            self._active_request = None
+            self._cancelled = False
+
 # Used to select and create engines
 ENGINE_LIST = [
         ("ollama", lambda conf : OllamaEngine(conf)),
@@ -291,7 +373,6 @@ class ImageExplorer:
     def __init__(self, config: Dict, image_dir: Path = None):
         self.config = config
         self._init_image_dir(image_dir)
-        self._init_models()
         self.current_index = 0
         self.is_kitty = os.environ.get("TERM") == "xterm-kitty"
         self.ocr_cancelled = False
@@ -311,20 +392,6 @@ class ImageExplorer:
             reverse=True,
         )
 
-    def _init_models(self):
-        """Initialize model configuration"""
-        ollama_config = self.config.get("ollama", {})
-        self.available_models = ollama_config.get("models", [])
-        self.current_model = (
-            self.available_models[0] 
-            if self.available_models 
-            else "llama3.2-vision"
-        )
-
-    def set_model(self, model_name: str):
-        """Set current OCR model (no validation)"""
-        self.current_model = model_name
-        return True
 
     def get_preview_image(self, path: Path) -> Image.Image:
         """Get resized image for preview"""
@@ -393,7 +460,7 @@ class ImageExplorer:
 class InputHandler:
     def __init__(self):
         self.session = PromptSession()
-        self.main_kb, self.command_kb = self._create_keybindings()
+        self.main_kb, self.command_kb, self.chat_kb = self._create_keybindings()
 
     def _create_keybindings(self) -> Tuple[KeyBindings, KeyBindings]:
         """Create keybindings for prompt sessions"""
@@ -405,6 +472,7 @@ class InputHandler:
             'm': '/model',
             'e': '/engine',
             'P': '/prompt',
+            'c': '/chat',
             'q': '/quit',
         }
         
@@ -424,8 +492,13 @@ class InputHandler:
         @command_kb.add('c-c')
         def _(event):
             event.app.exit(result=None)
+
+        chat_kb = KeyBindings()
+        @chat_kb.add('enter')
+        def _(event):
+            event.app.exit(result=event.app.current_buffer.text)
             
-        return main_kb, command_kb
+        return main_kb, command_kb, chat_kb
 
     async def get_command(self) -> Optional[str]:
         """Get user command with support for quick keys and full input"""
@@ -448,6 +521,35 @@ class InputHandler:
         except asyncio.CancelledError:
             return None
 
+    async def get_chat_input(self) -> Optional[str]:
+        """Multiline input with natural interrupt handling"""
+        lines = []
+        try:
+            while True:
+                line = await self.session.prompt_async(
+                    "Chat> " if not lines else "... ",
+                    key_bindings=self.chat_kb
+                )
+                if line.strip() == "/":
+                    break
+                lines.append(line.replace("//", "/", 1))
+            return "\n".join(lines)
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+class OCRContext:
+    "Current context used in the main loop"
+    def __init__(self):
+        self.reset()
+
+    def reset_chat(self):
+        self.chat_context: Optional[dict] = None
+
+    def reset(self):
+        self.reset_chat()
+        self.last_ocr_text: str = ""
+        self.last_ocr_image: Optional[Image.Image] = None
+
 # ==================
 # MAIN APPLICATION
 # ==================
@@ -465,30 +567,66 @@ async def main(image_dir: Path = None):
         return
 
     explorer.show_image()
-    
     handler = InputHandler()
     ocr_task = None
     ocr_running = asyncio.Event()
 
+    
+    ctx = OCRContext()
+
     while True:
+        if ctx.chat_context:  # Chat mode
+            try:
+                # Validate image hasn't changed
+                current_image = explorer.current_image()
+                if ctx.chat_context['image_path'] != current_image:
+                    print("\n⚠️ Image changed! Perform new OCR first.")
+                    ctx.reset_chat()
+                    continue
+
+                user_input = await handler.get_chat_input()
+                if user_input is None:
+                    ctx.reset_chat()
+                    print("\nExited chat mode")
+                    continue
+
+                print()  # Response separator
+                async for token in current_engine.stream_chat(user_input, ctx.chat_context):
+                    print(token, end="", flush=True)
+
+                print()  # Ensure clean prompt
+
+            except KeyboardInterrupt:
+                if current_engine:
+                    await current_engine.cancel()
+                    current_engine = None
+                ctx.reset_chat()
+                print("\nChat interrupted")
+                continue
+
+            continue # Chat mode
+
         try:
             cmd = await handler.get_command()
             if not cmd:
                 continue
                 
-            print(f"\n→ {cmd}")
+            print(f"→ {cmd}")
 
             if cmd == '/next':
                 explorer.next_image()
+                ctx.reset()
             elif cmd == '/prev':
                 explorer.prev_image()
+                ctx.reset()
             elif cmd == '/ocr':
                 if not current_engine:
                     current_engine = explorer.create_engine(engine_type)
                 if not ocr_running.is_set():
+                    ctx.reset()
                     ocr_running.set()
                     print("\n OCR Results:")
-                    ocr_task = asyncio.create_task(_run_ocr(current_engine, explorer, ocr_running))
+                    ocr_task = asyncio.create_task(_run_ocr(current_engine, explorer, ocr_running, ctx))
                     try:
                         await ocr_task
                     except asyncio.CancelledError:
@@ -496,7 +634,7 @@ async def main(image_dir: Path = None):
                 else:
                     print("\n OCR already in progress")
             elif cmd.startswith('/model'):
-                await handle_model_command(cmd, explorer)
+                await handle_model_command(cmd, config)
             elif cmd.startswith('/prompt'):
                 await handle_prompt_command(cmd, config)
             elif cmd.startswith('/engine'):
@@ -504,6 +642,20 @@ async def main(image_dir: Path = None):
                 if current_engine:
                     current_engine.cancel()
                 current_engine = None
+            elif cmd == '/chat':
+                if not ctx.last_ocr_text or not ctx.last_ocr_image:
+                    print("No OCR context available. Perform OCR first")
+                    continue
+
+                # Store prepared image for chat sessions
+                ctx.chat_context = {
+                    'engine': engine_type,
+                    'image_path': explorer.current_image(),
+                    'ocr_text': ctx.last_ocr_text,
+                    'prepared_image': ctx.last_ocr_image
+                }
+                print(f"\nEntered chat mode (image: {ctx.chat_context['image_path'].name})")
+
             elif cmd == '/quit':
                 break
             else:
@@ -520,7 +672,8 @@ async def main(image_dir: Path = None):
             current_engine = None
         except EOFError:
             if current_engine:
-                current_engine.cancel()
+                await current_engine.cancel()
+                current_engine = None
             print("quit")
             break
 
@@ -532,15 +685,22 @@ async def main(image_dir: Path = None):
         except asyncio.CancelledError:
             pass
 
-async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asyncio.Event):
+    if current_engine:
+        await current_engine.cancel()
+
+async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asyncio.Event, ocr_ctx: OCRContext):
     """Handle OCR streaming output"""
+    buffer = io.StringIO()
     try:
         img_path = explorer.current_image()
         img = Image.open(img_path)
-        img = engine.prepare_image(img)
+        img = ocr_ctx.last_ocr_image = engine.prepare_image(img)
 
         async for token in engine.stream_ocr(img):
             print(token, end="", flush=True)
+            buffer.write(token)
+
+        ocr_ctx.last_ocr_text =  buffer.getvalue()
     finally:
         print()
         ocr_running.clear()
@@ -596,25 +756,24 @@ async def make_multiple_choice(L: list, prompt: str) -> Optional[str]:
     return selection
 
 
-async def handle_model_command(cmd: str, explorer: ImageExplorer):
+async def handle_model_command(cmd: str, config: Dict):
     """Handle model selection commands"""
+    model_name = None
     if ' ' in cmd:
         model_name = cmd.split(' ', 1)[1]
-        explorer.set_model(model_name)
-        print(f" Model set to: {model_name}")
     else:
-        if explorer.available_models:
-            print("Recommendef models from config:")
-            selection = await make_multiple_choice(
-                explorer.available_models,
+        available_models = config["ollama"].get("models", [])
+        if available_models:
+            print("Recommended models from config:")
+            model_name = await make_multiple_choice(
+                available_models,
                 "Select model: "
             )
-            
-            if selection:
-                explorer.set_model(selection)
-                print(f" Model changed to: {selection}")
         else:
             print(" No recommended models in config. Use '/model <name>' to set manually.")
+    if model_name:
+        config["ollama"]["model"] = model_name
+        print(f" Model set to: {model_name}")
 
 async def handle_prompt_command(cmd: str, config: Dict):
     """Handle prompt selection commands"""

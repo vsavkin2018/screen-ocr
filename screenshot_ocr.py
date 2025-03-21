@@ -515,7 +515,8 @@ class InputHandler:
                 full_cmd = await self.session.prompt_async(
                     "", default="/",
                     key_bindings=self.command_kb,
-                    editing_mode=EditingMode.EMACS
+                    editing_mode=EditingMode.EMACS,
+                    multiline=False,
                 )
                 return full_cmd if full_cmd else None
                 

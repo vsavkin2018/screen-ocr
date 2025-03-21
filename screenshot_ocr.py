@@ -529,7 +529,7 @@ class InputHandler:
         if not session:
             session = self.chat_session = PromptSession()
         def cont(width, line_number, is_soft_wrap):
-            return "" if is_soft_wrap else "... "
+            return "" if is_soft_wrap else "..."+" "*max(0, width-3)
         try:
             line = await self.session.prompt_async(
                 "Chat> " ,

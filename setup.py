@@ -2,9 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name='screenshot-ocr',
-    version='0.2.0',
+    version='0.2.1',
     packages=find_packages(),  # Automatically find packages (if you have them)
-    py_modules=['screenshot_ocr'],  # If your main script is a single .py file
+    py_modules=['screenshot_ocr', 'ocr_base', 'ollama_engine'],  # If your main script is a single .py file
     install_requires=[
         'PyYAML',
         'httpx',

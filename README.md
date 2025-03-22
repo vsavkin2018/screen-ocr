@@ -1,24 +1,31 @@
 # screen-ocr
 
 Эта программа предназначена для распознавания текста на скриншотах, присылаемых пользователями, особенно в Telegram например.
-В данной версии поддерживаются только LLM через Ollama, планирую добавить и другие способы: tesseract, Vision.UI (?)
+Поддерживается распознавание через tesseract и LLM посредством Ollama. Планируется добавить другие движки, например
+easyocr и paddleocr.
 
 
 ## Установка
 
-1. Надо установить Ollama: https://github.com/ollama/ollama/blob/main/docs/linux.md
+1. Для работы с Ollama Надо установить Ollama: https://github.com/ollama/ollama/blob/main/docs/linux.md
 
 Там просто скачать архив и распаковать, можно запускать прям оттуда где распаковано, например `~/Build/ollama/bin/ollama serve` . 
 Собственно эта команда должна запуститься и ждать запросов на http://localhost:11434. Оставить работать в отдельном терминале или как-то ещё.
 
-2. Надо скачать какую-нибудь vision LLM.
+Далее надо скачать какую-нибудь vision LLM.
 
 Если есть GPU c 8G VRAM, то можно скачать `gemma3:4b`. Можно скачать `llama3.2-vision` - она побольше, не влезет в такую видеопамять, будет работать медленнее.
 Модели можно искать на сайте ollama по слову vision например.
 
 Сейчас в скрипте закодирована модель llama3.2-vision как дефолтная, но можно выбрать другую в конфиге или в рантайме.
 
-То есть, для начала работы, можно скачать модель так: `~/Build/ollama/bin/ollama pull llama3.2-vision` - там 11 Гбайт или типа того, надо подождать и чтоб место было.
+То есть, для начала работы, можно скачать модель так: `~/Build/ollama/bin/ollama pull llama3.2-vision` - там 10 Гбайт или типа того, надо подождать и чтоб место было.
+
+2. Для работы с tesseract надо установить tesseract:
+```
+apt install tesseract-ocr-all # На Debian
+```
+В конфиг-файле рекомендую установить хотя бы языки. Подробности в мануале по tesseract.
 
 3. Рекомендую поставить терминал kitty, он нужен чтобы графический превью того что распознаётся был:
 ```
@@ -29,7 +36,7 @@ apt install kitty kitty-shell-integration kitty-terminfo
 ```
 python3 -m venv env
 source env/bin/activate
-pip install -U pip setuptools  && pip install pyyaml httpx prompt_toolkit pillow
+pip install -U pip setuptools  && pip install pyyaml httpx prompt_toolkit pillow pytesseract
 ```
 
 5. Положить конфиг файл

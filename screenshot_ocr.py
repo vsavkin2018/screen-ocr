@@ -48,6 +48,10 @@ DEFAULT_CONFIG = {
         Please provide your answer using both image and text:""",
                
     },
+    "tesseract": {
+        "psm": 3,
+        "oem": 1,
+    },
     "preview_settings": {
         "max_width": 800,
         "max_height": 600
@@ -181,9 +185,11 @@ def load_config() -> tuple[dict, list[str]]:
 # ==================
 from ocr_base import *
 from ollama_engine import OllamaEngine
+from tesseract_engine import TesseractEngine
 
 # Used to select and create engines
 ENGINE_LIST = [
+        ("tesseract", lambda conf: TesseractEngine(conf)),
         ("ollama", lambda conf : OllamaEngine(conf)),
         ("dummy", lambda conf : DummyEngine())
 ]
@@ -468,7 +474,7 @@ async def main(image_dir: Path = None):
             elif cmd.startswith('/engine'):
                 engine_type = await handle_engine_command(cmd)
                 if current_engine:
-                    current_engine.cancel()
+                    await current_engine.cancel()
                 current_engine = None
             elif cmd == '/chat':
                 if not ctx.last_ocr_text or not ctx.last_ocr_image:

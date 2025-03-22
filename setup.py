@@ -4,7 +4,8 @@ setup(
     name='screenshot-ocr',
     version='0.2.9',
     packages=find_packages(),  # Automatically find packages (if you have them)
-    py_modules=['screenshot_ocr', 'ocr_base', 'ollama_engine'],  
+    py_modules=['screenshot_ocr', 'ocr_base', 
+	'ollama_engine', 'tesseract_engine'],  
     install_requires=[
         'PyYAML',
         'httpx',

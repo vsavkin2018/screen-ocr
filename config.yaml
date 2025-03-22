@@ -14,4 +14,10 @@ ollama:
   max_width: 1200
   max_height: 1200
 
+tesseract:
+  lang: eng+Cyrillic+Greek
+  # max_width: 3000
+  # max_height: 2500
+  # psm: 6
+  # oem: 1
 

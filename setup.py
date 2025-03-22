@@ -10,7 +10,8 @@ setup(
         'PyYAML',
         'httpx',
         'prompt_toolkit',
-        'Pillow'
+        'Pillow',
+	'pytesseract'
     ],
     entry_points={
         'console_scripts': [

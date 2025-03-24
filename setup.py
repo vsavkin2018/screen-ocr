@@ -5,7 +5,7 @@ setup(
     version='0.3.0',
     packages=find_packages(),  # Automatically find packages (if you have them)
     py_modules=['screenshot_ocr', 'ocr_base', 
-	'ollama_engine', 'tesseract_engine'],  
+	'ollama_engine', 'tesseract_engine', 'explore_images'],  
     install_requires=[
         'PyYAML',
         'httpx',

@@ -53,3 +53,5 @@ class DummyEngine(BaseEngine):
         pass
     async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
         yield("Nothing to see here!")
+    async def cancel(self):
+        pass

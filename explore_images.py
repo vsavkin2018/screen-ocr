@@ -1,9 +1,12 @@
 from typing import List, AsyncGenerator, Tuple, Optional, Dict
 import os
+import subprocess
 from pathlib import Path
 from PIL import Image, ImageGrab
 import hashlib
 from abc import ABC, abstractmethod
+
+from ocr_base import *
 
 # ======================
 # IMAGE SOURCE CLASSES

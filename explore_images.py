@@ -109,41 +109,6 @@ class ImageExplorer:
         """Generate hash for image comparison"""
         return hashlib.sha256(img.tobytes()).hexdigest()
 
-    def refresh_clipboard_image(self) -> bool:
-        """Update clipboard image source, returns True if changed"""
-        new_img = self._get_clipboard_image()
-        if not new_img:
-            return False
-
-        # Compare with existing clipboard image
-        new_hash = self._image_hash(new_img)
-        if self._clipboard_source and new_hash == self._image_hash(self._clipboard_source.get_image()):
-            return False  # No change
-
-        self._clipboard_source = MemoryImageSource(new_img, "clipboard")
-        return True
-
-    def promote_clipboard_image(self):
-        """Move clipboard image to front if unique"""
-        if not self._clipboard_source:
-            return
-
-        # Remove any existing clipboard images
-        self.image_sources = [
-            s for s in self.image_sources
-            if not isinstance(s, MemoryImageSource)
-        ]
-
-        # Check against all existing sources
-        is_unique = True
-        for source in self.image_sources:
-            if self._images_identical(self._clipboard_source, source):
-                is_unique = False
-                break
-
-        if is_unique:
-            self.image_sources.insert(0, self._clipboard_source)
-            self.current_index = 0
 
     def current_image(self) -> AbstractImageSource:
         return self.image_sources[self.current_index]

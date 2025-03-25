@@ -225,6 +225,7 @@ class InputHandler:
             'e': '/engine',
             'P': '/prompt',
             'c': '/chat',
+            '.': '/refresh', 'R': '/refresh',
             'q': '/quit',
         }
         
@@ -311,18 +312,23 @@ class OCRContext:
 # ==================
 async def main(image_dir: Path = None):
     config, warnings = load_config()
-    explorer = ImageExplorer(config, image_dir)
     current_engine: Optional[BaseEngine] = None  # Track active engine
     engine_type = ENGINE_LIST[0][0]
+    explorer = None
     
     print("\x1b[2J\x1b[H Screenshot OCR Explorer")
     if warnings:
         print("\n".join(warnings))
-    if not explorer.image_sources:
-        print(f"❌ No images found matching '{config['image_settings']['filename_pattern']}'")
-        return
 
-    explorer.show_image()
+    def init_explorer():
+        nonlocal explorer
+        explorer = ImageExplorer(config, image_dir)
+        if not explorer.image_sources:
+            print(f"❌ No images found matching '{config['image_settings']['filename_pattern']}'")
+            return
+        explorer.show_image()
+
+    init_explorer()
     handler = InputHandler()
     ocr_task = None
     ocr_running = asyncio.Event()
@@ -412,7 +418,9 @@ async def main(image_dir: Path = None):
                 }
                 print(f"\nEntered chat mode (image: {ctx.chat_context['image_desc']})")
                 print("Meta+Enter for enter, / or Ctrl+D for exit")
-
+            elif cmd == '/refresh':
+                ctx.reset()
+                init_explorer()
             elif cmd == '/quit':
                 break
             else:

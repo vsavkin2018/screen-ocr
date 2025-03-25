@@ -334,8 +334,8 @@ async def main(image_dir: Path = None):
         if ctx.chat_context:  # Chat mode
             try:
                 # Validate image hasn't changed
-                current_image = explorer.current_image()
-                if ctx.chat_context['image_path'] != current_image:
+                current_image = explorer.current_image().get_description()
+                if ctx.chat_context['image_desc'] != current_image:
                     print("\n⚠️ Image changed! Perform new OCR first.")
                     ctx.reset_chat()
                     continue
@@ -406,11 +406,11 @@ async def main(image_dir: Path = None):
                 # Store prepared image for chat sessions
                 ctx.chat_context = {
                     'engine': engine_type,
-                    'image_path': explorer.current_image(),
+                    'image_desc': explorer.current_image().get_description(),
                     'ocr_text': ctx.last_ocr_text,
                     'prepared_image': ctx.last_ocr_image
                 }
-                print(f"\nEntered chat mode (image: {ctx.chat_context['image_path'].name})")
+                print(f"\nEntered chat mode (image: {ctx.chat_context['image_desc']})")
                 print("Meta+Enter for enter, / or Ctrl+D for exit")
 
             elif cmd == '/quit':

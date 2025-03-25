@@ -310,13 +310,14 @@ class OCRContext:
 # ==================
 # MAIN APPLICATION
 # ==================
-async def main(image_dir: Path = None):
+async def main(image_dir: Path = None, show_banner = True):
     config, warnings = load_config()
     current_engine: Optional[BaseEngine] = None  # Track active engine
     engine_type = ENGINE_LIST[0][0]
     explorer = None
     
-    print("\x1b[2J\x1b[H Screenshot OCR Explorer")
+    if show_banner:
+        print("\x1b[2J\x1b[H Screenshot OCR Explorer")
     if warnings:
         print("\n".join(warnings))
 
@@ -337,6 +338,7 @@ async def main(image_dir: Path = None):
     ctx = OCRContext()
 
     while True:
+
         if ctx.chat_context:  # Chat mode
             try:
                 # Validate image hasn't changed
@@ -387,10 +389,18 @@ async def main(image_dir: Path = None):
                 if not ocr_running.is_set():
                     ctx.reset()
                     ocr_running.set()
+
+                    try:
+                        if ocr_task and not ocr_task.done():
+                            await ocr_task
+                    except Exception as e:
+                        print(f"\n Error while terminating: {str(e)}")
+
                     print("\n OCR Results:")
                     ocr_task = asyncio.create_task(_run_ocr(current_engine, explorer, ocr_running, ctx))
                     try:
                         await ocr_task
+                        ocr_task = None
                     except asyncio.CancelledError:
                         print("\n OCR aborted")
                 else:
@@ -432,7 +442,7 @@ async def main(image_dir: Path = None):
                 explorer.ocr_cancelled = True
                 print() # some workaround probably
             if current_engine:
-                current_engine.cancel()
+                await current_engine.cancel()
             ocr_running.clear()
             current_engine = None
         except EOFError:
@@ -466,6 +476,9 @@ async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asy
             buffer.write(token)
 
         ocr_ctx.last_ocr_text =  buffer.getvalue()
+
+    except asyncio.CancelledError:
+        print("\n OCR task cancelled")
     finally:
         print()
         ocr_running.clear()
@@ -582,7 +595,18 @@ async def handle_engine_command(cmd: str) -> str:
 def real_main():
     config = load_config()
     image_dir = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else None
-    asyncio.run(main(image_dir))
+    flag = False
+    show_banner = True
+    while not flag:
+        try:
+            save_show_banner = show_banner
+            show_banner = False
+            asyncio.run(main(image_dir, save_show_banner))
+            flag = True
+        except KeyboardInterrupt:
+            print("\nspurious interrupt")
+            pass
+
 
 if __name__ == "__main__":
     real_main()

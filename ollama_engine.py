@@ -23,6 +23,7 @@ class OllamaEngine(BaseEngine):
             # Close the HTTP connection immediately
             await self._active_request.aclose()
             self._active_request = None
+        # self._cancelled = False # let stream_ocr's finally block handle it
 
     async def stream_ocr(self, image: Image.Image) -> AsyncGenerator[str, None]:
         """Ollama-specific OCR implementation with error handling"""
@@ -132,8 +133,6 @@ class OllamaEngine(BaseEngine):
                     print(f"DEBUG: Caught asyncio.CancelledError in stream_chat: {type(e)}")
                     yield "\n Chat aborted"
                     return
-
-
 
         except Exception as e:
             yield f"\nChat Error: {str(e)}"

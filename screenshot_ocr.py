@@ -318,7 +318,7 @@ async def main(image_dir: Path = None):
     print("\x1b[2J\x1b[H Screenshot OCR Explorer")
     if warnings:
         print("\n".join(warnings))
-    if not explorer.image_paths:
+    if not explorer.image_sources:
         print(f"❌ No images found matching '{config['image_settings']['filename_pattern']}'")
         return
 
@@ -449,11 +449,11 @@ async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asy
     """Handle OCR streaming output"""
     buffer = io.StringIO()
     try:
-        img_path = explorer.current_image()
-        img = Image.open(img_path)
-        img = ocr_ctx.last_ocr_image = engine.prepare_image(img)
+        source = explorer.current_image()
+        img = source.get_image()
+        processed_img = ocr_ctx.last_ocr_image = engine.prepare_image(img)
 
-        async for token in engine.stream_ocr(img):
+        async for token in engine.stream_ocr(processed_img):
             print(token, end="", flush=True)
             buffer.write(token)
 

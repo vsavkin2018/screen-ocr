@@ -213,6 +213,7 @@ class InputHandler:
         self.session = PromptSession(history=self.history)
         self.chat_session = None
         self.main_kb, self.command_kb, self.chat_kb = self._create_keybindings()
+        self.input_task = None
 
     def _create_keybindings(self) -> Tuple[KeyBindings, KeyBindings]:
         """Create keybindings for prompt sessions"""
@@ -239,41 +240,39 @@ class InputHandler:
             event.app.exit(result='/')
 
         command_kb = KeyBindings()
-        #@command_kb.add('enter')
-        #def _(event):
-        #    event.app.exit(result=event.app.current_buffer.text)
-        #@command_kb.add('c-c')
-        #def _(event):
-        #    event.app.exit(result=None)
 
         chat_kb = KeyBindings()
-        #@chat_kb.add('enter')
-        #def _(event):
-        #    event.app.exit(result=event.app.current_buffer.text)
             
         return main_kb, command_kb, chat_kb
 
     async def get_command(self) -> Optional[str]:
         """Get user command with support for quick keys and full input"""
+        cmd = None
         try:
-            cmd = await self.session.prompt_async(
+            self.input_task = asyncio.create_task( self.session.prompt_async(
                 "> ",
                 key_bindings=self.main_kb,
-                enable_history_search=True
-            )
-            
+                enable_history_search=False,
+                handle_sigint=False,
+            ) )
+            cmd = await self.input_task
             if cmd == '/':
-                full_cmd = await self.session.prompt_async(
+                self.input_task = asyncio.create_task( self.session.prompt_async(
                     "", default="/",
                     key_bindings=self.command_kb,
                     editing_mode=EditingMode.EMACS,
                     multiline=False,
-                )
-                return full_cmd if full_cmd else None
+                    enable_history_search=True,
+                    handle_sigint=False,
+                ) )
+                full_cmd = await self.input_task
+                cmd = full_cmd if full_cmd else None
                 
-            return cmd
         except asyncio.CancelledError:
-            return None
+            print("\nget_command: got CancelledError")
+            cmd = None
+        finally:
+            self.input_task = None
 
     async def get_chat_input(self) -> Optional[str]:
         """Multiline input with natural interrupt handling"""
@@ -357,6 +356,18 @@ class OCRContext:
         self.last_ocr_text: str = ""
         self.last_ocr_image: Optional[Image.Image] = None
 
+# Ctrl+C handler
+def _sigint(ih):
+    global ocr_task
+
+    print("plonk!")
+    if ocr_task:
+        print(repr(ocr_task))
+        ocr_task.cancel()
+    if ih.input_task:
+        print(repr(ih.input_task))
+        ih.input_task.cancel()
+
 # ==================
 # MAIN APPLICATION
 # ==================
@@ -381,13 +392,22 @@ async def main(image_dir: Path = None, show_banner = True):
 
     init_explorer()
     handler = InputHandler()
+    global ocr_task
     ocr_task = None
-    # ocr_running = asyncio.Event() # not needed
 
-    
     ctx = OCRContext()
 
+
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, _sigint)
+
     while True:
+
+        if handler.input_task:
+            # Should not happen
+            print(f"\nMain Loop: input_task={repr(handler.input_task)}")
+            handler.input_task.cancel()
+            handler.input_task = None
 
         if ctx.chat_context:  # Chat mode
             try:

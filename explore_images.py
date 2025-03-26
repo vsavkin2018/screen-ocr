@@ -117,7 +117,7 @@ class ImageExplorer:
         """Display current image preview"""
         source = self.current_image()
         if self.is_kitty:
-            print("\x1b[2J\x1b[H", end="", flush=True)
+            print("", end="", flush=True)
             self._kitty_show_image(source.get_image())
         print(f"\n Current image: {source.get_description()}")
 

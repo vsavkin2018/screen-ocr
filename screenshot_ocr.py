@@ -294,6 +294,56 @@ class InputHandler:
         except (KeyboardInterrupt, EOFError):
             return None
 
+    async def make_multiple_choice(self, L: list, prompt: str) -> Optional[str]:
+        """
+        Let user choose from the list.
+        Elements of the list are either strings or (name, description) tuples
+
+        Returns a string (name) or None
+        """
+        max_len = 70
+        LL = []
+        for elem in L:
+            if isinstance(elem, tuple) or isinstance(elem, list):
+                name, desc = elem
+                desc = ' '.join(desc.split()) # replace multiple whitespaces by single space
+                printable = f"{name}: {desc}"
+                if len(printable)>max_len:
+                    printable = printable[:max_len-3] + "..."
+                LL.append((name, printable))
+            else:
+                LL.append((elem, elem))
+        #print ("debug:", L, LL)
+        for i,(_,printable) in enumerate(LL, 1):
+            print(f" {i}. {printable}")
+
+        completer = WordCompleter([name for name,_ in LL])
+        session = PromptSession()
+
+        selection = None
+        try:
+            selection = await session.prompt_async(
+                    prompt,
+                    completer=completer,
+                    complete_while_typing=True,
+                )
+
+            # Try to convert to index
+            if selection.isdigit():
+                try:
+                    index = int(selection) -1
+                    if index<0:
+                        raise IndexError()
+                    selection = LL[index][0]
+                except ValueError:
+                    pass
+                except IndexError:
+                    print("No such index:",selection)
+                    return None
+        except (KeyboardInterrupt, EOFError):
+            print("\n cancelled")
+        return selection
+
 class OCRContext:
     "Current context used in the main loop"
     def __init__(self):
@@ -402,11 +452,11 @@ async def main(image_dir: Path = None, show_banner = True):
                 except asyncio.CancelledError:
                     print("\n OCR aborted")
             elif cmd.startswith('/model'):
-                await handle_model_command(cmd, config)
+                await handle_model_command(cmd, config, handler)
             elif cmd.startswith('/prompt'):
-                await handle_prompt_command(cmd, config)
+                await handle_prompt_command(cmd, config, handler)
             elif cmd.startswith('/engine'):
-                engine_type = await handle_engine_command(cmd)
+                engine_type = await handle_engine_command(cmd, handler)
                 if current_engine:
                     await current_engine.cancel()
                 current_engine = None
@@ -476,58 +526,9 @@ async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_ctx: OCRCont
     finally:
         print()
 
-async def make_multiple_choice(L: list, prompt: str) -> Optional[str]:
-    """
-    Let user choose from the list.
-    Elements of the list are either strings or (name, description) tuples
-
-    Returns a string (name) or None
-    """
-    max_len = 70
-    LL = []
-    for elem in L:
-        if isinstance(elem, tuple) or isinstance(elem, list):
-            name, desc = elem
-            desc = ' '.join(desc.split()) # replace multiple whitespaces by single space
-            printable = f"{name}: {desc}"
-            if len(printable)>max_len:
-                printable = printable[:max_len-3] + "..."
-            LL.append((name, printable))
-        else:
-            LL.append((elem, elem))
-    #print ("debug:", L, LL)
-    for i,(_,printable) in enumerate(LL, 1):
-        print(f" {i}. {printable}")
-
-    completer = WordCompleter([name for name,_ in LL])
-    session = PromptSession()
-
-    selection = None
-    try:
-        selection = await session.prompt_async(
-                prompt,
-                completer=completer,
-                complete_while_typing=True,
-            )
-
-        # Try to convert to index
-        if selection.isdigit():
-            try:
-                index = int(selection) -1
-                if index<0:
-                    raise IndexError()
-                selection = LL[index][0]
-            except ValueError:
-                pass
-            except IndexError:
-                print("No such index:",selection)
-                return None
-    except (KeyboardInterrupt, EOFError):
-        print("\n cancelled")
-    return selection
 
 
-async def handle_model_command(cmd: str, config: Dict):
+async def handle_model_command(cmd: str, config: Dict, ih: InputHandler):
     """Handle model selection commands"""
     model_name = None
     if ' ' in cmd:
@@ -536,7 +537,7 @@ async def handle_model_command(cmd: str, config: Dict):
         available_models = config["ollama"].get("models", [])
         if available_models:
             print("Recommended models from config:")
-            model_name = await make_multiple_choice(
+            model_name = await ih.make_multiple_choice(
                 available_models,
                 "Select model: "
             )
@@ -546,7 +547,7 @@ async def handle_model_command(cmd: str, config: Dict):
         config["ollama"]["model"] = model_name
         print(f" Model set to: {model_name}")
 
-async def handle_prompt_command(cmd: str, config: Dict):
+async def handle_prompt_command(cmd: str, config: Dict, ih: InputHandler):
     """Handle prompt selection commands"""
     pr = None
     if ' ' in cmd:
@@ -554,7 +555,7 @@ async def handle_prompt_command(cmd: str, config: Dict):
     else:
         print("Suggested prompts:")
         PL = config["ollama"]["prompt_list"]
-        prname = await make_multiple_choice(
+        prname = await ih.make_multiple_choice(
                 PL,
                 "Select prompt: "
             )
@@ -570,13 +571,13 @@ async def handle_prompt_command(cmd: str, config: Dict):
         print(f" New prompt:\n{pr}\n")
         config["ollama"]["current_prompt"] = pr
 
-async def handle_engine_command(cmd: str) -> str:
+async def handle_engine_command(cmd: str, ih: InputHandler) -> str:
     """Handle engine selection commands"""
     if ' ' in cmd:
         name = cmd.split(' ', 1)[1]
     else:
         print("Available engines:")
-        name = await make_multiple_choice(
+        name = await ih.make_multiple_choice(
                 [n for n,_ in ENGINE_LIST],
                 "Select engine: "
             )

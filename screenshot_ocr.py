@@ -332,7 +332,7 @@ async def main(image_dir: Path = None, show_banner = True):
     init_explorer()
     handler = InputHandler()
     ocr_task = None
-    ocr_running = asyncio.Event()
+    # ocr_running = asyncio.Event() # not needed
 
     
     ctx = OCRContext()
@@ -386,25 +386,21 @@ async def main(image_dir: Path = None, show_banner = True):
             elif cmd == '/ocr':
                 if not current_engine:
                     current_engine = create_engine(engine_type, config)
-                if not ocr_running.is_set():
-                    ctx.reset()
-                    ocr_running.set()
+                ctx.reset()
 
-                    try:
-                        if ocr_task and not ocr_task.done():
-                            await ocr_task
-                    except Exception as e:
-                        print(f"\n Error while terminating: {str(e)}")
-
-                    print("\n OCR Results:")
-                    ocr_task = asyncio.create_task(_run_ocr(current_engine, explorer, ocr_running, ctx))
-                    try:
+                try:
+                    if ocr_task and not ocr_task.done():
                         await ocr_task
-                        ocr_task = None
-                    except asyncio.CancelledError:
-                        print("\n OCR aborted")
-                else:
-                    print("\n OCR already in progress")
+                except Exception as e:
+                    print(f"\n Error while terminating: {str(e)}")
+
+                print("\n OCR Results:")
+                ocr_task = asyncio.create_task(_run_ocr(current_engine, explorer, ctx))
+                try:
+                    await ocr_task
+                    ocr_task = None
+                except asyncio.CancelledError:
+                    print("\n OCR aborted")
             elif cmd.startswith('/model'):
                 await handle_model_command(cmd, config)
             elif cmd.startswith('/prompt'):
@@ -438,12 +434,10 @@ async def main(image_dir: Path = None, show_banner = True):
                 print("Available: /next(n), /prev(p), /ocr(o), /model(m), /quit(q)")
 
         except KeyboardInterrupt:
-            if ocr_running.is_set():
-                explorer.ocr_cancelled = True
-                print() # some workaround probably
+            explorer.ocr_cancelled = True
+            print() # some workaround probably
             if current_engine:
                 await current_engine.cancel()
-            ocr_running.clear()
             current_engine = None
         except EOFError:
             if current_engine:
@@ -463,7 +457,7 @@ async def main(image_dir: Path = None, show_banner = True):
     if current_engine:
         await current_engine.cancel()
 
-async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asyncio.Event, ocr_ctx: OCRContext):
+async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_ctx: OCRContext):
     """Handle OCR streaming output"""
     buffer = io.StringIO()
     try:
@@ -481,7 +475,6 @@ async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_running: asy
         print("\n OCR task cancelled")
     finally:
         print()
-        ocr_running.clear()
 
 async def make_multiple_choice(L: list, prompt: str) -> Optional[str]:
     """

@@ -273,6 +273,7 @@ class InputHandler:
             cmd = None
         finally:
             self.input_task = None
+        return cmd
 
     async def get_chat_input(self) -> Optional[str]:
         """Multiline input with natural interrupt handling"""

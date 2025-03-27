@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='screenshot-ocr',
-    version='0.3.0',
+    version='0.3.1',
     packages=find_packages(),  # Automatically find packages (if you have them)
     py_modules=['screenshot_ocr', 'ocr_base', 
 	'ollama_engine', 'tesseract_engine', 'explore_images'],  

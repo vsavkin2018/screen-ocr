@@ -123,14 +123,12 @@ class OllamaEngine(BaseEngine):
                             except json.JSONDecodeError:
                                 continue
                 except httpx.RequestError as e:
-                    print(f"DEBUG: Caught httpx.RequestError in stream_chat: {type(e)}")
                     if self._cancelled:
                         yield "\n Chat aborted"
                     else:
-                        yield "\n Chat connection error"
+                        yield f"\n Chat connection error{str(e)}"
                     return
                 except asyncio.CancelledError as e:
-                    print(f"DEBUG: Caught asyncio.CancelledError in stream_chat: {type(e)}")
                     yield "\n Chat aborted"
                     return
 

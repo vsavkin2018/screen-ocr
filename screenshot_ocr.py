@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
 import sys
+import tty
+import termios
 import base64
 import asyncio
 import json
@@ -239,40 +241,62 @@ class InputHandler:
         def _(event):
             event.app.exit(result='/')
 
+        @main_kb.add('c-c')
+        def _(event):
+            event.app.exit(result=None)
+
         command_kb = KeyBindings()
+        @command_kb.add('c-c')
+        def _(event):
+            event.app.exit(result=None)
 
         chat_kb = KeyBindings()
+        @chat_kb.add('c-c')
+        def _(event):
+            event.app.exit(result='/')
             
         return main_kb, command_kb, chat_kb
 
+    async def _prompt_wrapper(self, session: PromptSession, prompt: str, **kwargs) -> Optional[str]:
+        res = None
+        fd = sys.__stdin__.fileno()
+        tty_attrs = termios.tcgetattr(fd)
+
+        try:
+            self.input_task = asyncio.create_task( session.prompt_async(
+                prompt, handle_sigint=False, **kwargs
+            ) )
+            res = await self.input_task
+
+        except asyncio.CancelledError:
+            print(f"\n{sys._getframe(1).f_code.co_name}: _prompt_wrapper got CancelledError")
+            res = None
+        finally:
+            self.input_task = None
+            termios.tcsetattr(fd, termios.TCSAFLUSH, tty_attrs)
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGINT, _sigint)
+
+        return res
+
     async def get_command(self) -> Optional[str]:
         """Get user command with support for quick keys and full input"""
-        cmd = None
-        try:
-            self.input_task = asyncio.create_task( self.session.prompt_async(
+
+        cmd = await self._prompt_wrapper(self.session,
                 "> ",
                 key_bindings=self.main_kb,
                 enable_history_search=False,
-                handle_sigint=False,
-            ) )
-            cmd = await self.input_task
-            if cmd == '/':
-                self.input_task = asyncio.create_task( self.session.prompt_async(
+            ) 
+        if cmd == '/':
+            full_cmd = await self._prompt_wrapper ( self.session,
                     "", default="/",
                     key_bindings=self.command_kb,
                     editing_mode=EditingMode.EMACS,
                     multiline=False,
                     enable_history_search=True,
-                    handle_sigint=False,
-                ) )
-                full_cmd = await self.input_task
-                cmd = full_cmd if full_cmd else None
+                ) 
+            cmd = full_cmd if full_cmd else None
                 
-        except asyncio.CancelledError:
-            print("\nget_command: got CancelledError")
-            cmd = None
-        finally:
-            self.input_task = None
         return cmd
 
     async def get_chat_input(self) -> Optional[str]:
@@ -283,15 +307,16 @@ class InputHandler:
         def cont(width, line_number, is_soft_wrap):
             return "" if is_soft_wrap else "..."+" "*max(0, width-3)
         try:
-            line = await self.session.prompt_async(
+            line = await self._prompt_wrapper(session,
                 "Chat> " ,
                 key_bindings=self.chat_kb,
                 multiline=True,
                 prompt_continuation = cont,
+                editing_mode=EditingMode.EMACS,
             )
             line = line.replace("//", "/", 1)
             return line
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             return None
 
     async def make_multiple_choice(self, L: list, prompt: str) -> Optional[str]:
@@ -320,13 +345,21 @@ class InputHandler:
         completer = WordCompleter([name for name,_ in LL])
         session = PromptSession()
 
+        kb = KeyBindings()
+        @kb.add('c-c')
+        def _(event):
+            event.app.exit(result=None)
+
         selection = None
         try:
-            selection = await session.prompt_async(
+            selection = await self._prompt_wrapper(session,
                     prompt,
                     completer=completer,
+                    key_bindings=kb,
                     complete_while_typing=True,
                 )
+            if not selection:
+                return selection
 
             # Try to convert to index
             if selection.isdigit():
@@ -358,16 +391,17 @@ class OCRContext:
         self.last_ocr_image: Optional[Image.Image] = None
 
 # Ctrl+C handler
-def _sigint(ih):
+def _sigint():
     global ocr_task
+    global handler
 
-    print("plonk!")
+    #print("plonk!")
     if ocr_task:
-        print(repr(ocr_task))
+        #print(repr(ocr_task))
         ocr_task.cancel()
-    if ih.input_task:
-        print(repr(ih.input_task))
-        ih.input_task.cancel()
+    if handler and handler.input_task:
+        #print(repr(handler.input_task))
+        handler.input_task.cancel()
 
 # ==================
 # MAIN APPLICATION
@@ -392,6 +426,7 @@ async def main(image_dir: Path = None, show_banner = True):
         explorer.show_image()
 
     init_explorer()
+    global handler
     handler = InputHandler()
     global ocr_task
     ocr_task = None
@@ -426,10 +461,18 @@ async def main(image_dir: Path = None, show_banner = True):
                     continue
 
                 print()  # Response separator
-                async for token in current_engine.stream_chat(user_input, ctx.chat_context):
-                    print(token, end="", flush=True)
+                if not current_engine:
+                    current_engine = create_engine(engine_type, config)
+                try:
+                    if ocr_task and not ocr_task.done():
+                        await ocr_task
+                except Exception as e:
+                    print(f"\n Error while terminating: {str(e)}")
 
-                print()  # Ensure clean prompt
+                ocr_task = asyncio.create_task(_run_chat_question(
+                    current_engine.stream_chat(user_input, ctx.chat_context)))
+                await ocr_task
+                ocr_task = None
 
             except KeyboardInterrupt:
                 if current_engine:
@@ -547,6 +590,15 @@ async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_ctx: OCRCont
     finally:
         print()
 
+async def _run_chat_question(g):
+    """Prints chat output in its own task"""
+    try:
+        async for token in g:
+            print(token, end="", flush=True)
+    except asyncio.CancelledError:
+        print("\n OCR task cancelled")
+    finally:
+        print()  # Ensure clean prompt
 
 
 async def handle_model_command(cmd: str, config: Dict, ih: InputHandler):

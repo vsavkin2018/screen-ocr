@@ -112,74 +112,11 @@ def load_config() -> tuple[dict, list[str]]:
 # CTRL+C HANDLING STRATEGY FOR OCR OPERATIONS (Multi-Engine Version)
 # ======================================================================
 
-# ======================================================================
-# CRITICAL INTERRUPT HANDLING (DO NOT MODIFY WITHOUT TESTING)
-# ======================================================================
-#
-# Implementation Strategy for Ctrl+C/Ctrl+D:
-#
-# 1. Ctrl+C (KeyboardInterrupt) Handling:
-#    - During OCR Processing:
-#      a) Main app calls current_engine.cancel()
-#      b) Engine performs implementation-specific abort:
-#         - HTTP engines: Close connection
-#         - Subprocess engines: Send SIGTERM
-#         - Threaded engines: Set stop flags
-#      c) Engine's generator yields abort message
-#      d) Automatically returns to command prompt
-#    - At Idle State:
-#      a) Discard current input (if any)
-#      b) Show new command prompt
-#
-# 2. Ctrl+D (EOF) Handling:
-#    a) Clean exit with "Exiting..." confirmation
-#    b) Cancel current engine if active
-#    c) Safely closes event loop
-#
-# Key Components:
-# - BaseEngine.cancel(): Unified cancellation interface
-# - Engine-owned cleanup: Each implementation manages its resources
-# - Main app coordination: Tracks active engine instance
-#
-# Error Prevention:
-# 1. Single cancellation entry point (main app → engine.cancel())
-# 2. No direct task cancellation - engine-specific cleanup
-# 3. Connection/process cleanup owned by engine implementations
-# 4. Timeout enforcement per engine requirements
-#
-# Critical Implementation Details:
-# 1. Engine implementations MUST:
-#    - Implement cancel() to stop active operations atomically
-#    - Ensure generator termination after cancellation
-#    - Yield exactly ONE abort message when cancelled
-#    - Handle cleanup of network/subprocess resources
-#
-# 2. The main app MUST:
-#    - Maintain reference to current_engine during operations
-#    - Call cancel() on KeyboardInterrupt
-#    - Never manage engine-specific resources directly
-#    - Reset current_engine reference after completion
-#
-# 3. EOF handling MUST:
-#    - Break main loop immediately
-#    - Call cancel() if engine is active
-#
-# Edge Case Guarantees:
-# - Ctrl+C during HTTP streaming: Engine closes connection
-# - Ctrl+C during subprocess execution: Engine sends SIGTERM
-# - Rapid double Ctrl+C: Treated as single abort
-# - Ctrl+D during OCR: Full exit with engine cleanup
-# - Mixed engine types: Uniform cancellation behavior
-#
-# WARNING: This interrupt handling is engine-dependent. Modifications MUST:
-# - Preserve BaseEngine interface contract
-# - Maintain engine-owned resource cleanup
-# - Test all scenarios per engine type:
-#   1. HTTP-based engines (Ollama)
-#   2. Subprocess-based engines (Tesseract)
-#   3. Thread-pool engines
-#   4. Mixed interrupt sequences across types
-# ======================================================================
+# When in command prompt, SIGINT is not generated, Ctrl+C is handled by prompt_tookit by key binding.
+# When waiting for completion of a task, _sigint is responsible for cancelling the current task.
+# _sigint access global variables: ocr_task and handler.input_task, cancelling that which is not None.
+# We have to restore the signal handler after call to prompt_async (_prompt_wrapper does it).
+# Engine must implement cancel() method to close all external resources and shut down any processes.
 
 
 # ==================
@@ -470,7 +407,8 @@ async def main(image_dir: Path = None, show_banner = True):
                     print(f"\n Error while terminating: {str(e)}")
 
                 ocr_task = asyncio.create_task(_run_chat_question(
-                    current_engine.stream_chat(user_input, ctx.chat_context)))
+                    current_engine.stream_chat(user_input, ctx.chat_context),
+		    current_engine))
                 await ocr_task
                 ocr_task = None
 
@@ -587,16 +525,18 @@ async def _run_ocr(engine: BaseEngine, explorer: ImageExplorer, ocr_ctx: OCRCont
 
     except asyncio.CancelledError:
         print("\n OCR task cancelled")
+        await engine.cancel()
     finally:
         print()
 
-async def _run_chat_question(g):
+async def _run_chat_question(g, engine):
     """Prints chat output in its own task"""
     try:
         async for token in g:
             print(token, end="", flush=True)
     except asyncio.CancelledError:
         print("\n OCR task cancelled")
+        await engine.cancel()
     finally:
         print()  # Ensure clean prompt
 

@@ -14,6 +14,25 @@ ollama:
   max_width: 1200
   max_height: 1200
 
+#  #==== This will replace built-in prompts ====
+#  prompts:
+#    - generic: |
+#        Act as an OCR assistant. Analyze the provided image and:
+#                1. Recognize all visible text in the image as accurately as possible.
+#                2. Maintain the original structure and formatting of the text.
+#                3. If any words or phrases are unclear, indicate this with [unclear] in your transcription.
+#
+#                Provide only the transcription without any additional comments.
+#    - funny: "What's funny in this image?"
+#    - network: |
+#        This image contains network diagnostics. Please extract all the text carefully,
+#        especially hostnames, IP addresses, URLs, measurement data, if any.
+#    - tabular: |
+#        Please extract all the tabular data and print it in CSV format.
+#    - russian: |
+#        This image contains text in Russian. Please extract it verbatim,
+#        no commentary, OCR only.
+
 tesseract:
   lang: eng+Cyrillic+Greek
   # max_width: 3000

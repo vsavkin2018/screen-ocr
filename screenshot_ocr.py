@@ -104,6 +104,15 @@ def load_config() -> tuple[dict, list[str]]:
         else "llama3.2-vision" )
     ollama_config["model"] = current_model
     # TODO: Parsing prompt dict-list
+    prompts_dl = ollama_config.get("prompts", None)
+    if prompts_dl:
+        PL = []
+        for d in prompts_dl:
+            assert(len(d)==1)
+            key_value = next(iter(d.items()))
+            PL.append(key_value)
+        if PL:
+            ollama_config["prompt_list"] = PL
 
     return config, warnings
 

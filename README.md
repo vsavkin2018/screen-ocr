@@ -1,6 +1,6 @@
 # screen-ocr
 
-This program is designed for recognizing text in screenshots sent by users, especially in Telegram for example.
+This program is designed for recognizing text in screenshots sent by customers, especially via IM apps.
 Recognition is supported via tesseract and LLM through Ollama. There are plans to add other engines, such as easyocr and paddleocr.
 
 ## Installation

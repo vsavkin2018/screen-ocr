@@ -68,7 +68,8 @@ There is a choice of engine with the `e` key.
 For the ollama engine, there is a choice of model: with the `m` key from the list in the config. Or even `/model <name>`. You can use `/prompt <text>` to set a prompt.
 Or use `Shift+P` to select a prompt from the list (default or in the config).
 
-There is an option to clarify in chat mode. After recognition, a chat opens with the "c" key, you can enter a question.
+There is an option to clarify using chat mode. After a successful OCR, a chat opens with the `c` key, and you can enter a question. 
+Multiline input is supported, Meta+Enter to send the question to the current engine. Only "ollama" engine supports chat mode for now.
 You can enter several questions, but so far the context is not taken into account, only the OCR result and the last question.
 
 Exit the chat with the command "/" or `Ctrl+D`.

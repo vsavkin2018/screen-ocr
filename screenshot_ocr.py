@@ -156,7 +156,26 @@ from explore_images import ImageExplorer
 # ==================
 # INPUT HANDLER
 # ==================
+
+# Commands with shortcuts and descriptions:
+MAIN_COMMANDS = [
+        ("/next", 'n', 'select next image'),
+        ("/prev", 'p', 'select previous image'),
+        ("/refresh", ['.', 'R'], 'refresh image list'),
+        ("/ocr",  'o', 'perform OCR on current image'),
+        ("/engine", 'e', 'select OCR engine'),
+        ("/model", 'm', 'select LLM model'),
+        ("/prompt", 'P', 'select prompt for LLM'),
+        ("/chat", 'c', 'enter chat mode'),
+        ("/quit", 'q', 'quit application'),
+        ("/help", 'h', 'display help message')
+]
+# InputHandler class
 class InputHandler:
+    """
+    Prompt for a command or other input from the user.
+    Supported: hotkeys, history, readline-like editing.
+    """
     def __init__(self):
         self.history = InMemoryHistory()
         self.session = PromptSession(history=self.history)
@@ -167,17 +186,13 @@ class InputHandler:
     def _create_keybindings(self) -> Tuple[KeyBindings, KeyBindings]:
         """Create keybindings for prompt sessions"""
         main_kb = KeyBindings()
-        quick_actions = {
-            'n': '/next',
-            'p': '/prev',
-            'o': '/ocr',
-            'm': '/model',
-            'e': '/engine',
-            'P': '/prompt',
-            'c': '/chat',
-            '.': '/refresh', 'R': '/refresh',
-            'q': '/quit',
-        }
+        quick_actions = dict()
+        for cmd,shorts,_ in MAIN_COMMANDS:
+            if type(shorts) is list:
+                for s in shorts:
+                    quick_actions[s] = cmd
+            else:
+                quick_actions[shorts] = cmd
         
         for key, cmd in quick_actions.items():
             @main_kb.add(key)
@@ -361,6 +376,7 @@ async def main(image_dir: Path = None, show_banner = True):
     
     if show_banner:
         print("\x1b[2J\x1b[H Screenshot OCR Explorer")
+        print("Press 'h' for help")
     if warnings:
         print("\n".join(warnings))
 
@@ -439,7 +455,16 @@ async def main(image_dir: Path = None, show_banner = True):
                 
             print(f"→ {cmd}")
 
-            if cmd == '/next':
+            if cmd == '/help':
+                print("\nCommands supported:")
+                for cmd,shorts,desc in MAIN_COMMANDS:
+                    if type(shorts) is list:
+                        kk = ",".join(f"'{k}'" for k in shorts)
+                    else:
+                        kk = "'" + shorts + "'"
+                    print(f"{kk}\t{cmd:10s} {desc}")
+                print()
+            elif cmd == '/next':
                 explorer.next_image()
                 ctx.reset()
             elif cmd == '/prev':

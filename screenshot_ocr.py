@@ -339,6 +339,73 @@ class InputHandler:
             print("\n cancelled")
         return selection
 
+class MainCommand:
+    """
+    Handle command with or without parameters.
+    Print an error message if needed.
+    """
+    def __init__(self, cmd: str):
+        self.cmd = cmd
+        self.param = None
+
+    def get_param(self) -> Optional[str]:
+        """
+        User must check for the command first, otherwise may return None.
+        """
+        return self.param
+
+    def check_unitary(self, pat: str) -> bool:
+        "Command `pat` must be without parameters"
+        if not self.cmd.startswith(pat):
+            return False
+        L,N = len(pat),len(self.cmd)
+        if L==N or self.cmd[L:].isspace():
+            return True
+        else:
+            if self.cmd[L].isspace():
+                print(f"\nCommand {pat} does cannot have a parameter")
+            return False
+
+    def check_optional(self, pat: str) -> bool:
+        """
+        Command `pat` have optional parameter.
+        Returns: flag.
+        Optional paramenter returned by `get_param`.
+        """
+        if not self.cmd.startswith(pat):
+            return False
+        L,N = len(pat),len(self.cmd)
+        if L==N:
+            return True
+        if not self.cmd[L].isspace():
+            return False # another command
+        maybe_param = self.cmd[L+1:]
+        if len(maybe_param)>=1:
+            self.param = maybe_param
+        return True
+
+    def check_mandatory(self, pat: str) -> Optional[str]:
+        """
+        Command `pat` has mandatory parameter.
+        Returns: parameter of None.
+        """
+        if not self.cmd.startswith(pat):
+            return None
+        L,N = len(pat),len(self.cmd)
+        if L==N:
+            # No parameter
+            print(f"\nCommand {pat} must have a parameter")
+            return None
+        if not self.cmd[L].isspace():
+            return None # another command
+        maybe_param = self.cmd[L+1:]
+        if len(maybe_param)>=1:
+            self.param = maybe_param
+            return maybe_param
+        else:
+            return None
+
+
 class OCRContext:
     "Current context used in the main loop"
     def __init__(self):
@@ -449,28 +516,29 @@ async def main(image_dir: Path = None, show_banner = True):
             continue # Chat mode
 
         try:
-            cmd = await handler.get_command()
-            if not cmd:
+            cmd_str = await handler.get_command()
+            if not cmd_str:
                 continue
                 
-            print(f"→ {cmd}")
+            print(f"→ {cmd_str}")
+            cmd = MainCommand(cmd_str)
 
-            if cmd == '/help':
+            if cmd.check_unitary('/help'):
                 print("\nCommands supported:")
-                for cmd,shorts,desc in MAIN_COMMANDS:
+                for cmd1,shorts,desc in MAIN_COMMANDS:
                     if type(shorts) is list:
                         kk = ",".join(f"'{k}'" for k in shorts)
                     else:
                         kk = "'" + shorts + "'"
-                    print(f"{kk}\t{cmd:10s} {desc}")
+                    print(f"{kk}\t{cmd1:10s} {desc}")
                 print()
-            elif cmd == '/next':
+            elif cmd.check_unitary('/next'):
                 explorer.next_image()
                 ctx.reset()
-            elif cmd == '/prev':
+            elif cmd.check_unitary('/prev'):
                 explorer.prev_image()
                 ctx.reset()
-            elif cmd == '/ocr':
+            elif cmd.check_unitary('/ocr'):
                 if not current_engine:
                     current_engine = create_engine(engine_type, config)
                 ctx.reset()
@@ -488,16 +556,16 @@ async def main(image_dir: Path = None, show_banner = True):
                     ocr_task = None
                 except asyncio.CancelledError:
                     print("\n OCR aborted")
-            elif cmd.startswith('/model'):
+            elif cmd.check_optional('/model'):
                 await handle_model_command(cmd, config, handler)
-            elif cmd.startswith('/prompt'):
+            elif cmd.check_optional('/prompt'):
                 await handle_prompt_command(cmd, config, handler)
-            elif cmd.startswith('/engine'):
+            elif cmd.check_optional('/engine'):
                 engine_type = await handle_engine_command(cmd, handler)
                 if current_engine:
                     await current_engine.cancel()
                 current_engine = None
-            elif cmd == '/chat':
+            elif cmd.check_unitary('/chat'):
                 if not ctx.last_ocr_text or not ctx.last_ocr_image:
                     print("No OCR context available. Perform OCR first")
                     continue
@@ -511,14 +579,14 @@ async def main(image_dir: Path = None, show_banner = True):
                 }
                 print(f"\nEntered chat mode (image: {ctx.chat_context['image_desc']})")
                 print("Meta+Enter for enter, / or Ctrl+D for exit")
-            elif cmd == '/refresh':
+            elif cmd.check_unitary('/refresh'):
                 ctx.reset()
                 init_explorer()
-            elif cmd == '/quit':
+            elif cmd.check_unitary('/quit'):
                 break
             else:
-                print(f" Unknown command: {cmd}")
-                print("Available: /next(n), /prev(p), /ocr(o), /model(m), /quit(q)")
+                print(f" Unknown command: {cmd_str}")
+                print("Available: /next(n), /prev(p), /ocr(o), /model(m), /quit(q), ... ,/help(h) for more")
 
         except KeyboardInterrupt:
             explorer.ocr_cancelled = True
@@ -576,12 +644,10 @@ async def _run_chat_question(g, engine):
         print()  # Ensure clean prompt
 
 
-async def handle_model_command(cmd: str, config: Dict, ih: InputHandler):
+async def handle_model_command(cmd: MainCommand, config: Dict, ih: InputHandler):
     """Handle model selection commands"""
-    model_name = None
-    if ' ' in cmd:
-        model_name = cmd.split(' ', 1)[1]
-    else:
+    model_name = cmd.get_param()
+    if not model_name:
         available_models = config["ollama"].get("models", [])
         if available_models:
             print("Recommended models from config:")
@@ -595,12 +661,10 @@ async def handle_model_command(cmd: str, config: Dict, ih: InputHandler):
         config["ollama"]["model"] = model_name
         print(f" Model set to: {model_name}")
 
-async def handle_prompt_command(cmd: str, config: Dict, ih: InputHandler):
+async def handle_prompt_command(cmd: MainCommand, config: Dict, ih: InputHandler):
     """Handle prompt selection commands"""
-    pr = None
-    if ' ' in cmd:
-        pr = cmd.split(' ', 1)[1]
-    else:
+    pr = cmd.get_param()
+    if not pr:
         print("Suggested prompts:")
         PL = config["ollama"]["prompt_list"]
         prname = await ih.make_multiple_choice(
@@ -619,11 +683,10 @@ async def handle_prompt_command(cmd: str, config: Dict, ih: InputHandler):
         print(f" New prompt:\n{pr}\n")
         config["ollama"]["current_prompt"] = pr
 
-async def handle_engine_command(cmd: str, ih: InputHandler) -> str:
+async def handle_engine_command(cmd: MainCommand, ih: InputHandler) -> str:
     """Handle engine selection commands"""
-    if ' ' in cmd:
-        name = cmd.split(' ', 1)[1]
-    else:
+    name = cmd.get_param()
+    if not name:
         print("Available engines:")
         name = await ih.make_multiple_choice(
                 [n for n,_ in ENGINE_LIST],
